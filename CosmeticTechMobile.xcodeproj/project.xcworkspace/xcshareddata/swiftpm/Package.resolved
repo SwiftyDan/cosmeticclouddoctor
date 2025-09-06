@@ -1,0 +1,69 @@
+{
+  "originHash" : "00077e074c383315313f09aa6fe31968e05e3dd5bf8810eacb147902f3622c11",
+  "pins" : [
+    {
+      "identity" : "giphy-ios-sdk",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Giphy/giphy-ios-sdk",
+      "state" : {
+        "revision" : "37f5b1ff6cf8bc4a78c0bc5eb1b814381bac9580",
+        "version" : "2.2.16"
+      }
+    },
+    {
+      "identity" : "jitsi-meet-ios-sdk-releases",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/jitsi/jitsi-meet-ios-sdk-releases.git",
+      "state" : {
+        "revision" : "8e8572559bc667e2e816c85414a482ffad5e2293",
+        "version" : "11.4.0"
+      }
+    },
+    {
+      "identity" : "keychainaccess",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/kishikawakatsumi/KeychainAccess.git",
+      "state" : {
+        "branch" : "master",
+        "revision" : "e0c7eebc5a4465a3c4680764f26b7a61f567cdaf"
+      }
+    },
+    {
+      "identity" : "libwebp-xcode",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/SDWebImage/libwebp-Xcode",
+      "state" : {
+        "revision" : "0d60654eeefd5d7d2bef3835804892c40225e8b2",
+        "version" : "1.5.0"
+      }
+    },
+    {
+      "identity" : "skeletonview",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Juanpe/SkeletonView.git",
+      "state" : {
+        "revision" : "2f5274827d310e32c09325dd3e0007120940988e",
+        "version" : "1.31.0"
+      }
+    },
+    {
+      "identity" : "starscream",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/daltoniam/Starscream.git",
+      "state" : {
+        "revision" : "c6bfd1af48efcc9a9ad203665db12375ba6b145a",
+        "version" : "4.0.8"
+      }
+    },
+    {
+      "identity" : "webrtc",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/jitsi/webrtc",
+      "state" : {
+        "revision" : "3a659cecd97387a0cf079be34f82f3bb24a03e13",
+        "version" : "124.0.2"
+      }
+    }
+  ],
+  "version" : 3
+}
