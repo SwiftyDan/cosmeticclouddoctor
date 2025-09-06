@@ -35,6 +35,10 @@ struct CosmeticTechMobileApp: App {
             VoIPPushHandler.shared.refreshVoIPToken()
             // Check for pending Jitsi presentation from CallKit
             CallKitManager.shared.presentPendingJitsiIfNeeded()
+            // Print initial VoIP status for debugging
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                VoIPPushHandler.shared.printVoIPStatus()
+            }
         }
         print("🚀 CosmeticTechMobileApp: App initialized")
     }
@@ -225,6 +229,16 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
             print("📞 AppDelegate: Ending call due to backgrounding")
             CallKitManager.shared.endCall()
         }
+    }
+
+    // MARK: - Debug Methods
+
+    /// Debug method to check VoIP status - can be called from debugger
+    func debugVoIPStatus() {
+        print("🔍 ===== DEBUG: VoIP STATUS =====")
+        VoIPPushHandler.shared.printVoIPStatus()
+        VoIPPushHandler.shared.checkCallDeliveryStats()
+        print("==================================")
     }
 
 }

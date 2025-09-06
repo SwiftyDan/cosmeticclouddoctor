@@ -53,6 +53,11 @@ class VoIPPushHandler: NSObject {
     private var pendingCalls: [PendingCall] = []
     private let pendingQueue = DispatchQueue(label: "com.cosmetictech.voip.pending")
 
+    // Enhanced monitoring for VoIP delivery
+    private var callDeliveryStats: [String: Date] = [:]
+    private var lastVoIPTokenRefresh: Date?
+    private var voipPushCount: Int = 0
+
     override init() {
         super.init()
         print("🚀 VoIPPushHandler initializing...")
@@ -151,7 +156,8 @@ class VoIPPushHandler: NSObject {
         // Force token refresh by re-setting desired push types
         voipRegistry.desiredPushTypes = []
         voipRegistry.desiredPushTypes = [.voIP]
-        
+        lastVoIPTokenRefresh = Date()
+
         print("🔄 VoIPPushHandler: Requesting VoIP token refresh...")
     }
     
@@ -183,12 +189,100 @@ class VoIPPushHandler: NSObject {
     func checkVoIPRegistrationStatus() {
         print("🔍 Checking VoIP registration status...")
         print("📱 Desired push types: \(String(describing: voipRegistry.desiredPushTypes))")
-        
+
         if let pushToken = voipRegistry.pushToken(for: .voIP) {
             let token = pushToken.map { String(format: "%02.2hhx", $0) }.joined()
             print("🔔 Current VoIP token: \(token)")
         } else {
             print("❌ No VoIP token available")
+        }
+    }
+
+    // MARK: - Enhanced Monitoring Methods
+
+    /// Get comprehensive VoIP status for debugging
+    func getVoIPStatus() -> [String: Any] {
+        var status: [String: Any] = [:]
+
+        // Token status
+        if let token = getCurrentVoIPToken() {
+            status["token_available"] = true
+            status["token_length"] = token.count
+        } else {
+            status["token_available"] = false
+        }
+
+        // Background modes check
+        if let backgroundModes = Bundle.main.infoDictionary?["UIBackgroundModes"] as? [String] {
+            status["background_modes"] = backgroundModes
+            status["voip_background_enabled"] = backgroundModes.contains("voip")
+        } else {
+            status["background_modes"] = []
+            status["voip_background_enabled"] = false
+        }
+
+        // Call state
+        status["is_in_call"] = isInCall
+        status["is_call_ringing"] = isCallRinging
+        status["pending_calls_count"] = pendingCalls.count
+
+        // Statistics
+        status["total_voip_pushes"] = voipPushCount
+        status["last_token_refresh"] = lastVoIPTokenRefresh?.description ?? "never"
+
+        // Jitsi state check
+        DispatchQueue.main.sync {
+            status["jitsi_active"] = GlobalJitsiManager.shared.isPresentingJitsi
+        }
+
+        return status
+    }
+
+    /// Print detailed VoIP status for debugging
+    func printVoIPStatus() {
+        let status = getVoIPStatus()
+        print("🔍 ===== VoIP STATUS REPORT =====")
+        print("📱 Token Available: \(status["token_available"] ?? "unknown")")
+        print("📏 Token Length: \(status["token_length"] ?? "N/A")")
+        print("🔄 VoIP Background Enabled: \(status["voip_background_enabled"] ?? "unknown")")
+        print("📞 In Call: \(status["is_in_call"] ?? "unknown")")
+        print("🔔 Call Ringing: \(status["is_call_ringing"] ?? "unknown")")
+        print("📋 Pending Calls: \(status["pending_calls_count"] ?? "unknown")")
+        print("📊 Total VoIP Pushes: \(status["total_voip_pushes"] ?? "unknown")")
+        print("🔄 Last Token Refresh: \(status["last_token_refresh"] ?? "unknown")")
+        print("🎥 Jitsi Active: \(status["jitsi_active"] ?? "unknown")")
+        print("===================================")
+    }
+
+    /// Track call delivery for monitoring
+    private func trackCallDelivery(callId: String, successful: Bool) {
+        let now = Date()
+        if successful {
+            callDeliveryStats[callId] = now
+            print("✅ Call delivery tracked: \(callId)")
+        } else {
+            print("❌ Call delivery failed: \(callId)")
+        }
+    }
+
+    /// Check for missed calls and provide statistics
+    func checkCallDeliveryStats() {
+        let now = Date()
+        let recentCalls = callDeliveryStats.filter {
+            now.timeIntervalSince($0.value) < 300 // Last 5 minutes
+        }
+
+        let oldCalls = callDeliveryStats.filter {
+            now.timeIntervalSince($0.value) >= 300 // Older than 5 minutes
+        }
+
+        print("📊 Call Delivery Stats:")
+        print("   - Recent calls (5min): \(recentCalls.count)")
+        print("   - Older calls: \(oldCalls.count)")
+        print("   - Total tracked: \(callDeliveryStats.count)")
+
+        if oldCalls.count > 0 {
+            print("⚠️ Potential missed calls detected: \(oldCalls.count)")
         }
     }
     
@@ -487,10 +581,19 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
     }
 
     private func handleVoIPPush(_ payload: PKPushPayload, voipCompletion: (() -> Void)? = nil) {
-        print("📨 Received incoming VoIP push: \(payload.dictionaryPayload)")
-        
+        voipPushCount += 1
+        let pushId = "voip_\(Date().timeIntervalSince1970)"
+
+        print("📨 [\(pushId)] Received incoming VoIP push #\(voipPushCount): \(payload.dictionaryPayload)")
+
+        // Print comprehensive status at the start of each VoIP push
+        printVoIPStatus()
+
         // CRITICAL: Always report a call to CallKit, even if payload parsing fails
         // This prevents the app from being terminated by iOS
+
+        // Store pushId for use in completion handler
+        let currentPushId = pushId
         
         // Extract call information from push payload
         // Support multiple payload formats (new preferred: additional_data)
@@ -646,6 +749,15 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
                 scriptUUID: scriptUUID,
                 clinicName: clinicName
         ) { error in
+                // Track call delivery success/failure
+                if let error = error {
+                    print("❌ [\(currentPushId)] CallKit error: \(error)")
+                    self.trackCallDelivery(callId: currentPushId, successful: false)
+                } else {
+                    print("✅ [\(currentPushId)] CallKit reported successfully")
+                    self.trackCallDelivery(callId: currentPushId, successful: true)
+                }
+
                 // Call VoIP completion handler after CallKit is notified
                 // CRITICAL: Must call completion even on error to prevent crash
                 if let voipCompletion = voipCompletion {
@@ -667,6 +779,15 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
                     scriptUUID: scriptUUID,
                     clinicName: clinicName
                 ) { error in
+                    // Track call delivery success/failure
+                    if let error = error {
+                        print("❌ [\(currentPushId)] CallKit error (sync): \(error)")
+                        self.trackCallDelivery(callId: currentPushId, successful: false)
+                    } else {
+                        print("✅ [\(currentPushId)] CallKit reported successfully (sync)")
+                        self.trackCallDelivery(callId: currentPushId, successful: true)
+                    }
+
                     // Call VoIP completion handler after CallKit is notified
                     // CRITICAL: Must call completion even on error to prevent crash
                     if let voipCompletion = voipCompletion {
