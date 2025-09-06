@@ -55,7 +55,9 @@ class KeychainService: KeychainServiceProtocol {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
-            kSecValueData as String: data
+            kSecValueData as String: data,
+            // Allow access while device is locked after first unlock to support background events
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
         ]
         
         let status = SecItemAdd(query as CFDictionary, nil)
@@ -69,7 +71,8 @@ class KeychainService: KeychainServiceProtocol {
             ]
             
             let updateAttributes: [String: Any] = [
-                kSecValueData as String: data
+                kSecValueData as String: data,
+                kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
             ]
             
             let updateStatus = SecItemUpdate(updateQuery as CFDictionary, updateAttributes as CFDictionary)
@@ -167,6 +170,26 @@ class KeychainService: KeychainServiceProtocol {
                 return account
             }
             return nil
+        }
+    }
+
+    // MARK: - Accessibility Migration Helpers
+    /// Ensures specified keys are marked as kSecAttrAccessibleAfterFirstUnlock so they are readable while locked
+    func ensureBackgroundAccessibility(forKeys keys: [String]) {
+        for key in keys {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: key
+            ]
+            let attrs: [String: Any] = [
+                kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            ]
+            let status = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
+            // Ignore not found; we're just best-effort migrating
+            if status != errSecSuccess && status != errSecItemNotFound {
+                print("Keychain accessibility update error for \(key): \(status)")
+            }
         }
     }
 } 

@@ -236,16 +236,14 @@ struct UserProfileView: View {
                 .shadow(color: .blue.opacity(0.3), radius: 8, x: 0, y: 4)
             }
             .buttonStyle(PlainButtonStyle())
+            
 
-            // App Version / Build / Environment
+            // App Version / Build
             VStack(spacing: 4) {
                 Text("CosmeticTech Mobile")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Text("Version \(appVersion) (Build \(buildNumber))")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                Text("Environment: \(APIConfiguration.shared.endpoints.environmentName)")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }

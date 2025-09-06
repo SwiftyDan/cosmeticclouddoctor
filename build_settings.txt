@@ -1,0 +1,1 @@
+OTHER_LDFLAGS = -Wl,-force_load,$(BUILT_PRODUCTS_DIR)/GiphyUISDK.framework/GiphyUISDK

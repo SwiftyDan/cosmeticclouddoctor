@@ -161,4 +161,31 @@ class RequestBodyBuilder {
         
         return body
     }
+    
+    // MARK: - Call Action Request
+    static func callActionBody(
+        scriptId: Int,
+        clinicSlug: String,
+        action: CallAction,
+        scriptUUID: String?,
+        doctorUserId: Int?,
+        doctorUserUUID: String?
+    ) -> [String: Any] {
+        var body: [String: Any] = [
+            "script_id": scriptId,
+            // Backend expects clinic_id; we map slug to id as used elsewhere
+            "clinic_id": clinicSlug,
+            "action": action.rawValue
+        ]
+        if let scriptUUID = scriptUUID, !scriptUUID.isEmpty {
+            body["script_uuid"] = scriptUUID
+        }
+        if let doctorUserUUID = doctorUserUUID, !doctorUserUUID.isEmpty {
+            body["doctor_user_uuid"] = doctorUserUUID
+        }
+        if let doctorUserId = doctorUserId {
+            body["doctor_user_id"] = doctorUserId
+        }
+        return body
+    }
 }

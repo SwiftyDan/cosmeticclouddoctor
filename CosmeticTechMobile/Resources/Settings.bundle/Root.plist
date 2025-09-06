@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PreferenceSpecifiers</key>
+	<array>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>Title</key>
+			<string>Environment Settings</string>
+			<key>FooterText</key>
+			<string>Change the API environment for testing and development purposes. Changes will take effect after app restart.</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Title</key>
+			<string>API Environment</string>
+			<key>Key</key>
+			<string>API_ENVIRONMENT</string>
+			<key>DefaultValue</key>
+			<string>production</string>
+			<key>Titles</key>
+			<array>
+				<string>Production</string>
+				<string>Staging</string>
+				<string>Development</string>
+				<string>Custom</string>
+			</array>
+			<key>Values</key>
+			<array>
+				<string>production</string>
+				<string>staging</string>
+				<string>development</string>
+				<string>custom</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSTextFieldSpecifier</string>
+			<key>Title</key>
+			<string>Custom API URL</string>
+			<key>Key</key>
+			<string>CUSTOM_API_URL</string>
+			<key>DefaultValue</key>
+			<string>https://your-custom-api.com/api</string>
+			<key>IsSecure</key>
+			<false/>
+			<key>KeyboardType</key>
+			<string>URL</string>
+			<key>AutocapitalizationType</key>
+			<string>None</string>
+			<key>AutocorrectionType</key>
+			<string>No</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSTextFieldSpecifier</string>
+			<key>Title</key>
+			<string>Custom Jitsi URL</string>
+			<key>Key</key>
+			<string>CUSTOM_JITSI_URL</string>
+			<key>DefaultValue</key>
+			<string>https://your-custom-jitsi.com</string>
+			<key>IsSecure</key>
+			<false/>
+			<key>KeyboardType</key>
+			<string>URL</string>
+			<key>AutocapitalizationType</key>
+			<string>None</string>
+			<key>AutocorrectionType</key>
+			<string>No</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>Title</key>
+			<string>Debug Information</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSTitleValueSpecifier</string>
+			<key>Title</key>
+			<string>Current API URL</string>
+			<key>Key</key>
+			<string>CURRENT_API_URL</string>
+			<key>DefaultValue</key>
+			<string>Loading...</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSTitleValueSpecifier</string>
+			<key>Title</key>
+			<string>Current Jitsi URL</string>
+			<key>Key</key>
+			<string>CURRENT_JITSI_URL</string>
+			<key>DefaultValue</key>
+			<string>Loading...</string>
+		</dict>
+	</array>
+	<key>StringsTable</key>
+	<string>Root</string>
+</dict>
+</plist>
+

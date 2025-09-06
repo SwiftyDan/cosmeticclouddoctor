@@ -294,6 +294,8 @@ struct CallsView: View {
                     roomId: params.roomId,
                     clinicSlug: params.clinicSlug,
                     scriptId: params.scriptId,
+                    scriptUUID: params.scriptUUID,
+                    clinicName: params.clinicName,
                     onEndCall: { [weak viewModel] in
                         // End the call and dismiss the view
                         print("🎥 Call ended from CallsView, dismissing view")

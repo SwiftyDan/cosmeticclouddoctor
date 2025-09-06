@@ -13,6 +13,7 @@ struct ContentView: View {
     @EnvironmentObject private var authManager: AuthManager
     @StateObject private var callKitManager = CallKitManager.shared
     @StateObject private var webViewService = WebViewService.shared
+    @StateObject private var globalJitsiManager = GlobalJitsiManager.shared
     @State private var selectedTab = 0
 
     var body: some View {
@@ -47,6 +48,26 @@ struct ContentView: View {
                 WebViewModal(url: url) {
                     webViewService.dismissWebView()
                 }
+            }
+        }
+        .fullScreenCover(isPresented: $globalJitsiManager.isPresentingJitsi) {
+            if let params = globalJitsiManager.jitsiParameters {
+                JitsiMeetConferenceView(
+                    roomName: params.roomName,
+                    displayName: params.displayName,
+                    email: params.email,
+                    conferenceUrl: params.conferenceUrl,
+                    roomId: params.roomId,
+                    clinicSlug: params.clinicSlug,
+                    scriptId: params.scriptId,
+                    scriptUUID: params.scriptUUID,
+                    clinicName: params.clinicName,
+                    onEndCall: {
+                        // End the call and dismiss the view
+                        print("🎥 Call ended from GlobalJitsiManager, dismissing view")
+                        globalJitsiManager.endCall()
+                    }
+                )
             }
         }
     }

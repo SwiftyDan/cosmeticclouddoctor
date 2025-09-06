@@ -9,6 +9,7 @@ import Foundation
 import CallKit
 import AVFoundation
 
+@MainActor
 class CallManager: NSObject, ObservableObject {
     static let shared = CallManager()
     

@@ -9,6 +9,7 @@ import Foundation
 import AVFoundation
 import AudioToolbox
 
+@MainActor
 class AudioService: NSObject, ObservableObject {
     static let shared = AudioService()
     
@@ -215,10 +216,63 @@ class AudioService: NSObject, ObservableObject {
     func deactivateCallAudioSession() {
         do {
             let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setActive(false)
+            // Be courteous to other audio and avoid deactivation errors
+            try audioSession.setActive(false, options: [.notifyOthersOnDeactivation])
             print("🎤 Call audio session deactivated successfully")
         } catch {
             print("❌ Failed to deactivate call audio session: \(error)")
+        }
+    }
+    
+    /// Transition from CallKit audio session to Jitsi audio session
+    func transitionToJitsiAudioSession() {
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            
+            // First deactivate the current session
+            try audioSession.setActive(false, options: [.notifyOthersOnDeactivation])
+            
+            // Configure for Jitsi meeting with optimal settings
+            try audioSession.setCategory(.playAndRecord, mode: .videoChat, options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker])
+            
+            // Set preferred sample rate and I/O buffer duration for video calls
+            try audioSession.setPreferredSampleRate(48000.0) // Higher sample rate for video calls
+            try audioSession.setPreferredIOBufferDuration(0.01) // 10ms for video calls
+            
+            // Activate the new session
+            try audioSession.setActive(true)
+            
+            print("🎤 Transitioned to Jitsi audio session successfully")
+            print("   - Category: \(audioSession.category)")
+            print("   - Mode: \(audioSession.mode)")
+            print("   - Sample Rate: \(audioSession.sampleRate)")
+            print("   - I/O Buffer Duration: \(audioSession.ioBufferDuration)")
+            
+        } catch {
+            print("❌ Failed to transition to Jitsi audio session: \(error)")
+            // Fallback to standard call audio session
+            activateCallAudioSession()
+        }
+    }
+    
+    /// Transition from Jitsi audio session back to normal audio session
+    func transitionFromJitsiAudioSession() {
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            
+            // Deactivate the current session
+            try audioSession.setActive(false, options: [.notifyOthersOnDeactivation])
+            
+            // Reset to default playback category
+            try audioSession.setCategory(.playback, mode: .default, options: [.duckOthers])
+            
+            // Activate the new session
+            try audioSession.setActive(true)
+            
+            print("🎤 Transitioned from Jitsi audio session successfully")
+            
+        } catch {
+            print("❌ Failed to transition from Jitsi audio session: \(error)")
         }
     }
     
@@ -271,7 +325,9 @@ class AudioService: NSObject, ObservableObject {
     }
 
     deinit {
-        stopAllSounds()
+        DispatchQueue.main.async { [weak self] in
+            self?.stopAllSounds()
+        }
     }
     
 } 

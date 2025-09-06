@@ -40,9 +40,9 @@ final class WebSocketManager: ObservableObject, WebSocketDelegate {
         }
         return ""
     }
-    private let baseURL = "https://cosmeticcloud.tech"
+    private let baseURL = EnvironmentManager.shared.currentSocketURL
     private let reverbKey = ConfigurationServiceFactory.createConfigurationService().realtimeKey
-    private let reverbHost = ConfigurationServiceFactory.createConfigurationService().realtimeHost ?? "cosmeticcloud.tech"
+    private let reverbHost = EnvironmentManager.shared.currentSocketURL.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: "")
     private let reverbPort = 443
 
     enum ConnectionStatus {

@@ -17,6 +17,12 @@ struct SimpleResponse: Codable {
     }
 }
 
+// MARK: - Call Action Types
+enum CallAction: String, Codable {
+    case accepted = "ACCEPTED"
+    case rejected = "REJECTED"
+}
+
 // MARK: - API Service Protocol
 protocol APIServiceProtocol {
     func request<T: Codable>(
@@ -103,8 +109,7 @@ class AuthenticationAPIService {
     }
     
     func login(email: String, password: String) async throws -> LoginResponse {
-        // Force production endpoints for all testing/deploy builds
-        APIConfiguration.shared.setEnvironment(.production)
+        // Use current environment settings
         let endpoints = APIConfiguration.shared.endpoints
         let body = RequestBodyBuilder.loginBody(email: email, password: password)
         
@@ -394,6 +399,8 @@ class QueueAPIService {
         let scriptUUID: String?
         let scriptNumber: String?
         let roomName: String?
+        let timeonly: String?
+        let doctorUserId: Int?
         
         enum CodingKeys: String, CodingKey {
             case id
@@ -407,6 +414,8 @@ class QueueAPIService {
             case scriptUUID = "script_uuid"
             case scriptNumber = "script_number"
             case roomName = "room_name"
+            case timeonly
+            case doctorUserId = "doctor_user_id"
         }
     }
     
@@ -608,7 +617,7 @@ class QueueAPIService {
     
     /// Removes a queue item using the queue-remove API endpoint
     /// Note: clinicSlug is used as clinic_id in the API request since the backend requires clinic_id
-    func removeQueueItem(scriptUUID: String, scriptId: Int, clinicSlug: String, clinicName: String, callerName: String, roomName: String?) async throws -> Bool {
+    func removeQueueItem(scriptUUID: String, scriptId: Int, clinicSlug: String, clinicName: String?, callerName: String?, roomName: String?) async throws -> Bool {
         guard let user: User = keychainService.retrieve(key: "user_data", type: User.self) else {
             logger.error("❌ Failed to remove queue item: No user data found")
             throw NetworkError.unauthorized
@@ -626,8 +635,8 @@ class QueueAPIService {
             "doctor_user_uuid": user.userUUID ?? "",
             "clinic_id": clinicSlug, // Using clinicSlug as clinic_id since we don't have clinic_id
             "script_id": scriptId,
-            "clinic_name": clinicName,
-            "caller_name": callerName,
+            "clinic_name": clinicName ?? "",
+            "caller_name": callerName ?? "",
             "script_uuid": scriptUUID,
             "room_name": roomName ?? ""
         ]
@@ -637,8 +646,9 @@ class QueueAPIService {
         logger.info("   - Script UUID: \(scriptUUID)")
         logger.info("   - Script ID: \(scriptId)")
         logger.info("   - Clinic ID: \(clinicSlug)")
-        logger.info("   - Clinic Name: \(clinicName)")
+        logger.info("   - Clinic Name: \(clinicName ?? "")")
         logger.info("   - Doctor User UUID: \(user.userUUID ?? "nil")")
+        logger.info("   - Doctor User ID: \(user.userId)")
         
         do {
             let response: SimpleResponse = try await apiService.request(
@@ -657,6 +667,56 @@ class QueueAPIService {
             logger.error("❌ Failed to remove queue item: \(error)")
             throw error
         }
+    }
+}
+
+// MARK: - Call Action API Service
+class CallActionAPIService {
+    private let apiService: APIServiceProtocol
+    private let keychainService: KeychainServiceProtocol
+    private let logger = Logger(subsystem: "com.cosmetictech.callaction", category: "CallActionAPIService")
+    
+    init(apiService: APIServiceProtocol = APIService(),
+         keychainService: KeychainServiceProtocol = KeychainService()) {
+        self.apiService = apiService
+        self.keychainService = keychainService
+    }
+    
+    func reportCallAction(scriptId: Int, clinicSlug: String, scriptUUID: String?, action: CallAction) async throws -> EmptyResponse {
+        guard let authToken = getAuthToken() else {
+            throw NetworkError.unauthorized
+        }
+        
+        let endpoints = APIConfiguration.shared.endpoints
+        // Pull current user info for required fields
+        let currentUser: User? = keychainService.retrieve(key: "user_data", type: User.self)
+        let body = RequestBodyBuilder.callActionBody(
+            scriptId: scriptId,
+            clinicSlug: clinicSlug,
+            action: action,
+            scriptUUID: scriptUUID,
+            doctorUserId: currentUser?.userId,
+            doctorUserUUID: currentUser?.userUUID
+        )
+        
+        logger.info("📞 Reporting call action: \(action.rawValue) for script \(scriptId) at clinic \(clinicSlug)")
+        
+        // Use aggressive configuration for call actions to ensure responsiveness
+        let response: EmptyResponse = try await apiService.request(
+            endpoint: endpoints.callAction,
+            method: .POST,
+            body: body,
+            authToken: authToken,
+            configuration: .aggressive,
+            responseType: EmptyResponse.self
+        )
+        
+        logger.info("✅ Call action reported successfully")
+        return response
+    }
+    
+    private func getAuthToken() -> String? {
+        return keychainService.retrieve(key: "auth_token", type: String.self)
     }
 }
 

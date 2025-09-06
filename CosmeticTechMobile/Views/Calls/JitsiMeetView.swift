@@ -21,6 +21,8 @@ struct JitsiMeetConferenceView: View {
     let roomId: String? // Add roomId for server routing
     let clinicSlug: String?
     let scriptId: Int?
+    let scriptUUID: String? // Add scriptUUID for queue removal
+    let clinicName: String? // Add clinicName for queue removal
     let onEndCall: (() -> Void)? // New callback for ending the CallKit call
     
     @Environment(\.presentationMode) var presentationMode
@@ -33,6 +35,8 @@ struct JitsiMeetConferenceView: View {
          roomId: String? = nil,
          clinicSlug: String? = nil,
          scriptId: Int? = nil,
+         scriptUUID: String? = nil,
+         clinicName: String? = nil,
          onEndCall: (() -> Void)? = nil) {
         self.roomName = roomName
         self.displayName = displayName
@@ -41,6 +45,8 @@ struct JitsiMeetConferenceView: View {
         self.roomId = roomId
         self.clinicSlug = clinicSlug
         self.scriptId = scriptId
+        self.scriptUUID = scriptUUID
+        self.clinicName = clinicName
         self.onEndCall = onEndCall
         
         print("🎥 JitsiMeetConferenceView initialized:")
@@ -82,6 +88,10 @@ struct JitsiMeetConferenceView: View {
                 displayName: displayName,
                 email: email,
                 conferenceUrl: conferenceUrl,
+                scriptId: scriptId,
+                clinicSlug: clinicSlug,
+                scriptUUID: scriptUUID,
+                clinicName: clinicName,
                 onConferenceJoined: {
                     print("🎥 Conference joined - showing consultation button")
                     isConferenceActive = true
@@ -91,7 +101,7 @@ struct JitsiMeetConferenceView: View {
                     isConferenceActive = false
                     isConferenceStarting = false
                     print("🎥 Conference terminated - calling onEndCall to dismiss meeting")
-                    // Call onEndCall to properly dismiss the meeting
+                    // Call onEndCall to properly dismiss the meeting and end any remaining CallKit session
                     onEndCall?()
                 },
                 onConferenceFailed: { error in
@@ -627,6 +637,10 @@ struct DirectJitsiMeetView: UIViewRepresentable {
     let displayName: String?
     let email: String?
     let conferenceUrl: String?
+    let scriptId: Int?
+    let clinicSlug: String?
+    let scriptUUID: String?
+    let clinicName: String?
     let onConferenceJoined: (() -> Void)?
     let onConferenceTerminated: (() -> Void)?
     let onConferenceFailed: ((Error) -> Void)?
@@ -647,7 +661,7 @@ struct DirectJitsiMeetView: UIViewRepresentable {
                 // Log audio session status for debugging
                 print("🎤 Jitsi meeting starting - Audio session configured")
                 print("🎤 Room name: \(roomName)")
-                print("🎤 Server URL: \(conferenceUrl ?? "https://video-chat.cosmeticcloud.tech")")
+                print("🎤 Server URL: \(conferenceUrl ?? EnvironmentManager.shared.currentJitsiURL)")
                 
                 // Configure and join conference after permissions are granted
                 self.configureAndJoinConference(jitsiMeetView: jitsiMeetView)
@@ -673,7 +687,7 @@ struct DirectJitsiMeetView: UIViewRepresentable {
             )
             
             // Set the server URL to your custom Jitsi server
-            builder.serverURL = URL(string: conferenceUrl ?? "https://video-chat.cosmeticcloud.tech")
+            builder.serverURL = URL(string: conferenceUrl ?? EnvironmentManager.shared.currentJitsiURL)
             
             // Disable config loading to prevent disconnection issues
             builder.setConfigOverride("disableConfigLoading", withValue: true)
@@ -857,7 +871,9 @@ struct DirectJitsiMeetView: UIViewRepresentable {
             isUserEndingCall = true
             
             // Deactivate call audio session when meeting is about to end
-            AudioService.shared.deactivateCallAudioSession()
+            DispatchQueue.main.async {
+                AudioService.shared.deactivateCallAudioSession()
+            }
             
             // Only trigger dismissal if we had actually joined the conference
             if hasJoinedConference && !isConferenceEnding {
@@ -878,7 +894,9 @@ struct DirectJitsiMeetView: UIViewRepresentable {
             isUserEndingCall = true
             
             // Deactivate call audio session when meeting ends
-            AudioService.shared.deactivateCallAudioSession()
+            DispatchQueue.main.async {
+                AudioService.shared.deactivateCallAudioSession()
+            }
             
             // Only trigger dismissal if we had actually joined the conference and it's not already ending
             if hasJoinedConference && !isConferenceEnding {
@@ -895,6 +913,20 @@ struct DirectJitsiMeetView: UIViewRepresentable {
         // MARK: - Helper Methods
         private func handleConferenceEnd() {
             print("🎥 Handling conference end - hasJoinedConference: \(hasJoinedConference), isConferenceEnding: \(isConferenceEnding)")
+            
+            // Remove queue item when Jitsi meeting ends (native end call button)
+            DispatchQueue.main.async {
+                self.removeQueueItemFromJitsi()
+            }
+            
+            // Ensure CallKit session is properly ended when Jitsi meeting ends
+            DispatchQueue.main.async {
+                // Transition back to normal audio session
+                AudioService.shared.transitionFromJitsiAudioSession()
+                
+                // Use the proper method to end call from Jitsi
+                CallKitManager.shared.endCallFromJitsi()
+            }
             
             // Use direct callback for native close button
             if let onNativeClosePressed = parent.onNativeClosePressed {
@@ -917,6 +949,99 @@ struct DirectJitsiMeetView: UIViewRepresentable {
             
             // Also call onConferenceTerminated for cleanup
             parent.onConferenceTerminated?()
+        }
+        
+        /// Remove queue item when Jitsi meeting ends (native end call button)
+        private func removeQueueItemFromJitsi() {
+            // Try to get call data from CallKitManager first
+            if let call = CallKitManager.shared.currentCall {
+                // Use CallKitManager data if available (clinicName optional)
+                guard let scriptId = call.scriptId,
+                      let clinicSlug = call.clinicSlug,
+                      let scriptUUID = call.scriptUUID else {
+                    print("⚠️ JitsiMeetView: Cannot remove queue item - missing required parameters from CallKitManager")
+                    print("   - Script ID: \(call.scriptId?.description ?? "nil")")
+                    print("   - Clinic Slug: \(call.clinicSlug ?? "nil")")
+                    print("   - Script UUID: \(call.scriptUUID ?? "nil")")
+                    print("   - Clinic Name: \(call.clinicName ?? "nil")")
+                    return
+                }
+                
+                print("🗑️ JitsiMeetView: Removing queue item for ended Jitsi meeting (from CallKitManager)")
+                print("   - Script ID: \(scriptId)")
+                print("   - Script UUID: \(scriptUUID)")
+                print("   - Clinic Slug: \(clinicSlug)")
+                print("   - Clinic Name: \(call.clinicName ?? "")")
+                print("   - Caller Name: \(call.displayName)")
+                print("   - Room Name: \(call.roomName ?? "nil")")
+                
+                Task {
+                    do {
+                        let queueAPIService = QueueAPIService()
+                        let success = try await queueAPIService.removeQueueItem(
+                            scriptUUID: scriptUUID,
+                            scriptId: scriptId,
+                            clinicSlug: clinicSlug,
+                            clinicName: call.clinicName,
+                            callerName: call.displayName,
+                            roomName: call.roomName ?? parent.roomName
+                        )
+                        
+                        if success {
+                            print("✅ JitsiMeetView: Queue item removed successfully")
+                            
+                            // Clear call data after successful queue removal
+                            CallKitManager.shared.clearCallData()
+                        } else {
+                            print("❌ JitsiMeetView: Failed to remove queue item - API returned false")
+                        }
+                    } catch {
+                        print("❌ JitsiMeetView: Failed to remove queue item: \(error)")
+                    }
+                }
+            } else {
+                // Fallback to parent data if CallKitManager data is not available (clinicName optional)
+                guard let scriptId = parent.scriptId,
+                      let clinicSlug = parent.clinicSlug,
+                      let scriptUUID = parent.scriptUUID else {
+                    print("⚠️ JitsiMeetView: Cannot remove queue item - missing required parameters from both CallKitManager and parent")
+                    print("   - Script ID: \(parent.scriptId?.description ?? "nil")")
+                    print("   - Clinic Slug: \(parent.clinicSlug ?? "nil")")
+                    print("   - Script UUID: \(parent.scriptUUID ?? "nil")")
+                    print("   - Clinic Name: \(parent.clinicName ?? "nil")")
+                    return
+                }
+                
+                print("🗑️ JitsiMeetView: Removing queue item for ended Jitsi meeting (from parent data)")
+                print("   - Script ID: \(scriptId)")
+                print("   - Script UUID: \(scriptUUID)")
+                print("   - Clinic Slug: \(clinicSlug)")
+                print("   - Clinic Name: \(parent.clinicName ?? "")")
+                print("   - Caller Name: \(parent.displayName ?? "nil")")
+                print("   - Room Name: \(parent.roomName)")
+                
+                Task {
+                    do {
+                        let queueAPIService = QueueAPIService()
+                        let success = try await queueAPIService.removeQueueItem(
+                            scriptUUID: scriptUUID,
+                            scriptId: scriptId,
+                            clinicSlug: clinicSlug,
+                            clinicName: parent.clinicName,
+                            callerName: parent.displayName ?? "Unknown",
+                            roomName: parent.roomName
+                        )
+                        
+                        if success {
+                            print("✅ JitsiMeetView: Queue item removed successfully")
+                        } else {
+                            print("❌ JitsiMeetView: Failed to remove queue item - API returned false")
+                        }
+                    } catch {
+                        print("❌ JitsiMeetView: Failed to remove queue item: \(error)")
+                    }
+                }
+            }
         }
         
         func enterPicture(inPicture data: [AnyHashable : Any]!) {

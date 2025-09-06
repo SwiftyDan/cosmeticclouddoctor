@@ -46,6 +46,8 @@ struct JitsiParameters {
     let roomId: String?
     let clinicSlug: String?
     let scriptId: Int?
+    let scriptUUID: String?
+    let clinicName: String?
 
     init(
         roomName: String,
@@ -54,7 +56,9 @@ struct JitsiParameters {
         conferenceUrl: String?,
         roomId: String?,
         clinicSlug: String? = nil,
-        scriptId: Int? = nil
+        scriptId: Int? = nil,
+        scriptUUID: String? = nil,
+        clinicName: String? = nil
     ) {
         self.roomName = roomName
         self.displayName = displayName
@@ -63,6 +67,8 @@ struct JitsiParameters {
         self.roomId = roomId
         self.clinicSlug = clinicSlug
         self.scriptId = scriptId
+        self.scriptUUID = scriptUUID
+        self.clinicName = clinicName
     }
 }
 
@@ -91,7 +97,12 @@ class HomeViewModel: HomeViewModelProtocol {
     @Published var callHistoryErrorMessage: String?
 
     // Real-time Queue
-    @Published var queueList: [QueueItem] = []
+    @Published var queueList: [QueueItem] = [] {
+        didSet {
+            // Update badge count whenever queue list changes
+            BadgeManager.shared.updateBadgeCount(to: queueList.count)
+        }
+    }
     @Published var isLoadingQueue: Bool = false
 
     @Published var jitsiParameters: JitsiParameters?
@@ -123,6 +134,7 @@ class HomeViewModel: HomeViewModelProtocol {
             await self?.loadInitialQueueFromAPI()
         }
         observeJitsiEvents()
+        observeAppLifecycle()
     }
 
     deinit {
@@ -232,7 +244,7 @@ class HomeViewModel: HomeViewModelProtocol {
             roomName: roomName,
             displayName: displayName,
             email: email,
-            conferenceUrl: "https://video-chat.cosmeticcloud.tech", // Same server as VoIP calls
+            conferenceUrl: EnvironmentManager.shared.currentJitsiURL, // Same server as VoIP calls
             roomId: roomName,
             clinicSlug: item.clinicSlug,
             scriptId: item.scriptId
@@ -627,5 +639,30 @@ class HomeViewModel: HomeViewModelProtocol {
             return String(user.userId)
         }
         return "0"
+    }
+    
+    /// Observes app lifecycle events to manage badge count
+    private func observeAppLifecycle() {
+        // Clear badge when app becomes active (user opens the app)
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            print("📱 HomeViewModel: App became active, updating badge count to match queue")
+            // Update badge to match current queue count
+            BadgeManager.shared.updateBadgeCount(to: self?.queueList.count ?? 0)
+        }
+        
+        // Update badge when app enters background
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            print("📱 HomeViewModel: App entered background, ensuring badge reflects queue count")
+            // Ensure badge reflects current queue count when going to background
+            BadgeManager.shared.updateBadgeCount(to: self?.queueList.count ?? 0)
+        }
     }
 } 

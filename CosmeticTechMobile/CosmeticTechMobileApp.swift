@@ -19,9 +19,29 @@ struct CosmeticTechMobileApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     init() {
-        // Minimal initialization - avoid early VoIP setup
-        // VoIP and notifications will be initialized in AppDelegate
+        // Early initialization to ensure PushKit registry is created and retained ASAP
+        _ = VoIPPushHandler.shared
+        // Initialize environment manager early to ensure environment is ready
+        _ = EnvironmentManager.shared
+        // Initialize global Jitsi manager early to handle CallKit presentations
+        _ = GlobalJitsiManager.shared
+        // Migrate keychain items to be accessible after first unlock (needed for background call actions)
+        KeychainService().ensureBackgroundAccessibility(forKeys: ["auth_token", "user_data", "user_uuid"])
+        // Do not show Settings alert on first open; request silently
+        NotificationService.shared.ensurePermissionsOrPromptSettings(showSettingsAlertIfDenied: false)
+        DispatchQueue.main.async {
+            UIApplication.shared.registerForRemoteNotifications()
+            // Nudge PushKit to refresh if needed
+            VoIPPushHandler.shared.refreshVoIPToken()
+            // Check for pending Jitsi presentation from CallKit
+            CallKitManager.shared.presentPendingJitsiIfNeeded()
+        }
         print("🚀 CosmeticTechMobileApp: App initialized")
+    }
+
+    // Ensure environment is refreshed when app comes to foreground
+    func applicationWillEnterForeground(_ application: UIApplication) {
+        EnvironmentManager.shared.refreshFromUserDefaults()
     }
     
     var body: some Scene {
@@ -56,17 +76,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         print("🚀 AppDelegate: Application did finish launching")
         
+        // Initialize EnvironmentManager early
+        _ = EnvironmentManager.shared
+        
         // Set UNUserNotificationCenter delegate for foreground notifications
         UNUserNotificationCenter.current().delegate = self
         
-        // Initialize VoIP push registry following Apple's best practices
-        // This should be done early in the app lifecycle
-        VoIPPushHandler.shared.initializeVoIPPushRegistry()
-        
-        // Register for remote notifications (non-VoIP)
-        // Do this silently without showing permission dialog
-        NotificationService.shared.ensurePermissionsOrPromptSettings(showSettingsAlertIfDenied: false)
-        UIApplication.shared.registerForRemoteNotifications()
+        // VoIP push handler is already initialized in App init()
+        // Just ensure it's properly set up
+        _ = VoIPPushHandler.shared
         
         // Initialize background call trigger
         _ = BackgroundCallTrigger.shared
@@ -83,6 +101,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
                 .compactMap { $0 as? UIWindowScene }
                 .flatMap { $0.windows }
                 .first { $0.isKeyWindow }
+        }
+        
+        // Refresh environment settings when app becomes active
+        // This handles changes made in iOS Settings app
+        EnvironmentManager.shared.refreshFromUserDefaults()
+        
+        // If the app was activated from a CallKit accept while closed, present pending Jitsi
+        DispatchQueue.main.async {
+            CallKitManager.shared.presentPendingJitsiIfNeeded()
         }
     }
     

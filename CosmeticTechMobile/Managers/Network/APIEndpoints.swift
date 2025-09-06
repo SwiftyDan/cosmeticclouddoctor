@@ -7,8 +7,8 @@
 
 import Foundation
 
-// MARK: - API Environment Configuration
-enum APIEnvironment {
+// MARK: - API Environment Configuration (Legacy - kept for backward compatibility)
+enum LegacyAPIEnvironment {
     case development
     case staging
     case production
@@ -34,40 +34,58 @@ enum APIEnvironment {
 }
 
 // MARK: - API Endpoints
-struct APIEndpoints {
-    private let environment: APIEnvironment
+class APIEndpoints: ObservableObject {
+    private let environmentManager = EnvironmentManager.shared
     
-    init(environment: APIEnvironment = .development) {
-        self.environment = environment
+    init() {
+        // Use EnvironmentManager for dynamic environment switching
+        // Listen for environment changes
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(environmentChanged),
+            name: .environmentChanged,
+            object: nil
+        )
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+    
+    @objc private func environmentChanged() {
+        // Trigger UI update when environment changes
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
+        }
     }
     
     // MARK: - Authentication Endpoints
-    var login: String { "\(environment.baseURL)/login" }
-    var logout: String { "\(environment.baseURL)/logout" }
+    var login: String { "\(environmentManager.currentAPIURL)/login" }
+    var logout: String { "\(environmentManager.currentAPIURL)/logout" }
     
     // MARK: - Device Management Endpoints
-    var registerDevice: String { "\(environment.baseURL)/user-device" }
+    var registerDevice: String { "\(environmentManager.currentAPIURL)/user-device" }
     
     // MARK: - User Management Endpoints
-    var userProfile: String { "\(environment.baseURL)/user/profile" }
-    var updateProfile: String { "\(environment.baseURL)/user/profile" }
+    var userProfile: String { "\(environmentManager.currentAPIURL)/user/profile" }
+    var updateProfile: String { "\(environmentManager.currentAPIURL)/user/profile" }
 
     // MARK: - User Deletion Endpoint
-    var deleteUser: String { "\(environment.baseURL)/user" }
+    var deleteUser: String { "\(environmentManager.currentAPIURL)/user" }
     
     // MARK: - Call Management Endpoints
-    var callHistory: String { "\(environment.baseURL)/call-history" }
-    var createCall: String { "\(environment.baseURL)/calls/create" }
-    var endCall: String { "\(environment.baseURL)/calls/end" }
-    var callAction: String { "\(environment.baseURL)/call-action" }
+    var callHistory: String { "\(environmentManager.currentAPIURL)/call-history" }
+    var createCall: String { "\(environmentManager.currentAPIURL)/calls/create" }
+    var endCall: String { "\(environmentManager.currentAPIURL)/calls/end" }
+    var callAction: String { "\(environmentManager.currentAPIURL)/call-action" }
     
     // MARK: - VoIP Endpoints
-    var voipToken: String { "\(environment.baseURL)/voip/token" }
-    var voipRegister: String { "\(environment.baseURL)/voip/register" }
+    var voipToken: String { "\(environmentManager.currentAPIURL)/voip/token" }
+    var voipRegister: String { "\(environmentManager.currentAPIURL)/voip/register" }
     
     // MARK: - Consultation Endpoints
     func doctorConsultationVideo(clinicSlug: String, scriptId: Int) -> String {
-        let base = "\(environment.baseURL)/doctor-consultation-video"
+        let base = "\(environmentManager.currentAPIURL)/doctor-consultation-video"
         var comps = URLComponents(string: base)
         comps?.queryItems = [
             URLQueryItem(name: "clinic_slug", value: clinicSlug),
@@ -77,7 +95,7 @@ struct APIEndpoints {
     }
     
     func updateDoctorConsultationVideoStatus(scriptId: Int, clinicSlug: String, status: Int) -> String {
-        let base = "\(environment.baseURL)/doctor-consultation-video/\(scriptId)"
+        let base = "\(environmentManager.currentAPIURL)/doctor-consultation-video/\(scriptId)"
         var comps = URLComponents(string: base)
         comps?.queryItems = [
             URLQueryItem(name: "clinic_slug", value: clinicSlug),
@@ -89,7 +107,7 @@ struct APIEndpoints {
      // MARK: - Queue Endpoints
      /// Builds the queue entries URL with required doctor identifiers
      func queueEntriesURL(doctorUserUUID: String, doctorUserId: Int) -> String {
-         let base = "\(environment.baseURL)/queue-entries"
+         let base = "\(environmentManager.currentAPIURL)/queue-entries"
          var comps = URLComponents(string: base)
          comps?.queryItems = [
              URLQueryItem(name: "doctor_user_uuid", value: doctorUserUUID),
@@ -100,41 +118,51 @@ struct APIEndpoints {
     
     /// Builds the queue-remove URL for removing items from queue
     func queueRemoveURL() -> String {
-        return "\(environment.baseURL)/queue-remove"
+        return "\(environmentManager.currentAPIURL)/queue-remove"
     }
     
     // MARK: - Utility
-    var environmentName: String { environment.name }
-    var baseURL: String { environment.baseURL }
+    var environmentName: String { environmentManager.currentEnvironment.displayName }
+    var baseURL: String { environmentManager.currentAPIURL }
 }
 
-// MARK: - Global API Configuration
+// MARK: - Global API Configuration (Updated to use EnvironmentManager)
 class APIConfiguration {
     static let shared = APIConfiguration()
+    private let environmentManager = EnvironmentManager.shared
+    private let _endpoints: APIEndpoints
     
-    private init() {}
-    
-    // Default environment - can be changed at runtime
-    #if DEBUG
-    var currentEnvironment: APIEnvironment = .production
-    #else
-    var currentEnvironment: APIEnvironment = .production
-    #endif
+    private init() {
+        _endpoints = APIEndpoints()
+    }
     
     // Get endpoints for current environment
     var endpoints: APIEndpoints {
-        return APIEndpoints(environment: currentEnvironment)
+        return _endpoints
     }
     
     // Change environment at runtime
     func setEnvironment(_ environment: APIEnvironment) {
-        currentEnvironment = environment
-        print("🌐 API Environment changed to: \(environment.name)")
-        print("🔗 Base URL: \(environment.baseURL)")
+        environmentManager.setEnvironment(environment)
+    }
+    
+    // Force refresh endpoints (useful for debugging)
+    func refreshEndpoints() {
+        _endpoints.objectWillChange.send()
     }
     
     // Get current environment info
     func getCurrentEnvironmentInfo() -> String {
-        return "Environment: \(currentEnvironment.name) - URL: \(currentEnvironment.baseURL)"
+        return environmentManager.getEnvironmentInfo()
+    }
+    
+    // Legacy support for backward compatibility
+    var currentEnvironment: LegacyAPIEnvironment {
+        switch environmentManager.currentEnvironment {
+        case .production: return .production
+        case .staging: return .staging
+        case .development: return .development
+        case .custom: return .development // Custom maps to development for legacy support
+        }
     }
 }

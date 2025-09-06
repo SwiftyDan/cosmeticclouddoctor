@@ -62,6 +62,8 @@ struct HomeView: View {
                     roomId: params.roomId,
                     clinicSlug: params.clinicSlug,
                     scriptId: params.scriptId,
+                    scriptUUID: params.scriptUUID,
+                    clinicName: params.clinicName,
                     onEndCall: {
                         // Handle consultation ending and automatically remove queue item
                         viewModel.handleConsultationEnded()
@@ -408,7 +410,7 @@ struct RecentCallsSectionView: View {
                 EmptyStateView(
                     icon: "phone.circle",
                     title: "No Recent Calls",
-                    subtitle: "Approved and rejected calls will appear here.",
+                    subtitle: "Your recent call activity will appear here.",
                     iconSize: 60
                 )
                 .padding(.vertical, 20)
@@ -434,10 +436,9 @@ struct RecentCallsSectionView: View {
 
     private var recentApprovedRejectedCalls: [CallHistoryItem] {
         calls.filter { call in
-            // Show only approved or rejected calls (exclude queue/pending calls)
-            let hasAcceptedAt = !(call.acceptedAt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-            let hasRejectedAt = !(call.rejectedAt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-            return hasAcceptedAt || hasRejectedAt
+            // Show all calls (approved, rejected, and queue/pending calls)
+            // This gives users visibility into all recent call activity
+            return true
         }
         .sorted { call1, call2 in
             // Sort by most recent first

@@ -17,6 +17,8 @@ class CallKitManager: NSObject, ObservableObject {
     private var callProvider: CXProvider?
     private var callController: CXCallController?
     private var currentCallUUID: UUID?
+    private var isEndingForJitsiTransition: Bool = false
+    private var pendingJitsiParameters: JitsiParameters?
     
     @Published var isInCall: Bool = false
     @Published var currentCall: CallInfo?
@@ -38,6 +40,9 @@ class CallKitManager: NSObject, ObservableObject {
         let conferenceUrl: String?
         let scriptId: Int?
         let clinicSlug: String?
+        let scriptUUID: String?
+        let clinicName: String?
+        let roomName: String?
     }
     
     override init() {
@@ -73,6 +78,8 @@ class CallKitManager: NSObject, ObservableObject {
         roomName: String? = nil,
         scriptId: Int? = nil,
         clinicSlug: String? = nil,
+        scriptUUID: String? = nil,
+        clinicName: String? = nil,
         completion: ((Error?) -> Void)? = nil
     ) {
         print("📞 CallKitManager: Starting incoming call from \(displayName) (\(phoneNumber))")
@@ -88,7 +95,10 @@ class CallKitManager: NSObject, ObservableObject {
             callHistoryId: callHistoryId,
             conferenceUrl: conferenceUrl,
             scriptId: scriptId,
-            clinicSlug: clinicSlug
+            clinicSlug: clinicSlug,
+            scriptUUID: scriptUUID,
+            clinicName: clinicName,
+            roomName: roomName
         )
         
         currentCall = callInfo
@@ -132,61 +142,56 @@ class CallKitManager: NSObject, ObservableObject {
                 print("❌ CallKitManager: Failed to end call: \(error)")
             } else {
                 print("✅ CallKitManager: Call ended successfully")
+                // Reset all call state
+                self.currentCallUUID = nil
+                self.currentCall = nil
+                self.isInCall = false
+                self.currentCallState = .ended
             }
         }
     }
     
-    /// Accept the current call
-    func acceptCall() {
-        guard let callUUID = currentCallUUID else {
-            print("⚠️ CallKitManager: No active call to accept")
-            return
-        }
+    /// End call from Jitsi meeting (when user ends the meeting)
+    func endCallFromJitsi() {
+        print("📞 CallKitManager: Ending call from Jitsi meeting")
         
-        print("📞 CallKitManager: Accepting call")
+        // Reset all call state since CallKit session was already ended
+        currentCallUUID = nil
+        currentCall = nil
+        isInCall = false
+        currentCallState = .ended
         
-        let answerAction = CXAnswerCallAction(call: callUUID)
-        let transaction = CXTransaction(action: answerAction)
-        
-        callController?.request(transaction) { error in
-            if let error = error {
-                print("❌ CallKitManager: Failed to accept call: \(error)")
-            } else {
-                print("✅ CallKitManager: Call accepted successfully")
-                // Post notification that call was accepted
-                NotificationCenter.default.post(name: .VoIPCallAccepted, object: nil)
-                
-                // Trigger Jitsi meeting if we have call info
-                if let call = self.currentCall {
-                    print("🎥 CallKitManager: Triggering Jitsi meeting for accepted call")
-                    self.triggerJitsiMeeting(for: call)
-                }
-            }
-        }
+        // Post notification that call ended
+        NotificationCenter.default.post(name: .VoIPCallDidEnd, object: nil)
     }
     
-    /// Reject the current call
-    func rejectCall() {
-        guard let callUUID = currentCallUUID else {
-            print("⚠️ CallKitManager: No active call to reject")
+    /// Clear call data after queue removal is complete
+    func clearCallData() {
+        print("📞 CallKitManager: Clearing call data after queue removal")
+        currentCall = nil
+        pendingJitsiParameters = nil
+    }
+    
+    /// Check for pending Jitsi presentation when app becomes active
+    func presentPendingJitsiIfNeeded() {
+        guard let jitsiParameters = pendingJitsiParameters else {
+            print("🎥 CallKitManager: No pending Jitsi presentation")
             return
         }
         
-        print("📞 CallKitManager: Rejecting call")
+        print("🎥 CallKitManager: Presenting pending Jitsi meeting")
+        print("   - Room: \(jitsiParameters.roomName)")
+        print("   - Display Name: \(jitsiParameters.displayName)")
         
-        let endCallAction = CXEndCallAction(call: callUUID)
-        let transaction = CXTransaction(action: endCallAction)
-        
-        callController?.request(transaction) { error in
-            if let error = error {
-                print("❌ CallKitManager: Failed to reject call: \(error)")
-            } else {
-                print("✅ CallKitManager: Call rejected successfully")
-                // Post notification that call ended
-                NotificationCenter.default.post(name: .VoIPCallDidEnd, object: nil)
-            }
+        // Use global Jitsi manager to present the meeting
+        DispatchQueue.main.async {
+            GlobalJitsiManager.shared.presentJitsi(with: jitsiParameters)
         }
+        
+        // Clear pending parameters
+        pendingJitsiParameters = nil
     }
+    
     
     /// Trigger Jitsi meeting for accepted call
     private func triggerJitsiMeeting(for call: CallInfo) {
@@ -199,46 +204,128 @@ class CallKitManager: NSObject, ObservableObject {
             roomName: roomName,
             displayName: call.displayName,
             email: nil, // Could be extracted from user data if needed
-            conferenceUrl: "https://video-chat.cosmeticcloud.tech",
+            conferenceUrl: EnvironmentManager.shared.currentJitsiURL,
             roomId: roomName,
             clinicSlug: call.clinicSlug,
-            scriptId: call.scriptId
+            scriptId: call.scriptId,
+            scriptUUID: call.scriptUUID,
+            clinicName: call.clinicName
         )
         
-        // Post notification to trigger Jitsi presentation
-        NotificationCenter.default.post(
-            name: NSNotification.Name("PresentJitsiFromCallKit"),
-            object: nil,
-            userInfo: ["jitsiParameters": jitsiParameters]
-        )
+        // Store pending Jitsi parameters for when app becomes active
+        pendingJitsiParameters = jitsiParameters
         
-        print("🎥 CallKitManager: Posted PresentJitsiFromCallKit notification")
+        // Use global Jitsi manager to present the meeting
+        DispatchQueue.main.async {
+            GlobalJitsiManager.shared.presentJitsi(with: jitsiParameters)
+        }
+        
+        print("🎥 CallKitManager: Triggered Jitsi meeting presentation")
         print("   - Room: \(jitsiParameters.roomName)")
         print("   - Display Name: \(jitsiParameters.displayName)")
         print("   - Conference URL: \(jitsiParameters.conferenceUrl)")
+        
+        // CRITICAL: End the CallKit session when Jitsi meeting starts
+        // This prevents conflicts between CallKit and Jitsi audio sessions
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            print("🎥 CallKitManager: Ending CallKit session to transition to Jitsi")
+            self.endCallKitSession()
+            
+            // Transition to Jitsi audio session
+            AudioService.shared.transitionToJitsiAudioSession()
+        }
+    }
+    
+    /// End the CallKit session while preserving call state for Jitsi
+    private func endCallKitSession() {
+        guard let callUUID = currentCallUUID else {
+            print("⚠️ CallKitManager: No active CallKit session to end")
+            return
+        }
+        
+        print("📞 CallKitManager: Ending CallKit session for Jitsi transition")
+        
+        let endCallAction = CXEndCallAction(call: callUUID)
+        let transaction = CXTransaction(action: endCallAction)
+        
+        // Mark that this end is part of Jitsi transition so the delegate doesn't treat it as a rejection
+        isEndingForJitsiTransition = true
+
+        callController?.request(transaction) { error in
+            if let error = error {
+                print("❌ CallKitManager: Failed to end CallKit session: \(error)")
+                self.isEndingForJitsiTransition = false
+            } else {
+                print("✅ CallKitManager: CallKit session ended successfully")
+                // Delegate callback will handle state updates; avoid double-posting or clearing here
+            }
+        }
     }
     
     /// Resolves room name using the same logic as home screen
     /// This ensures consistency between VoIP calls and home screen call back
     private func resolveRoomNameForCall(_ call: CallInfo) -> String {
-        // Priority 1: Use roomId if available and not empty
+        // Priority 1: Use room_name if available
+        if let roomName = call.roomName, !roomName.isEmpty {
+            print("🎥 Using room_name from call: \(roomName)")
+            return roomName
+        }
+
+        // Priority 2: Use room_id if available
         if let roomId = call.roomId, !roomId.isEmpty {
-            print("🎥 Using roomId from call: \(roomId)")
+            print("🎥 Using room_id from call: \(roomId)")
             return roomId
         }
-        
-        // Priority 2: Use scriptId if available
+
+        // Priority 3: Use script_uuid if available
+        if let scriptUUID = call.scriptUUID, !scriptUUID.isEmpty {
+            print("🎥 Using script_uuid from call: \(scriptUUID)")
+            return scriptUUID
+        }
+
+        // Priority 4: Use script_id as fallback
         if let scriptId = call.scriptId {
             let fallback = "script_\(scriptId)"
-            print("🎥 Using scriptId as room: \(fallback)")
+            print("🎥 Using script_id as fallback room: \(fallback)")
             return fallback
         }
-        
-        // Priority 3: Use phone number as fallback
+
+        // Priority 5: Use phone number as last resort
         let fallback = call.phoneNumber
-        print("🎥 Using phone number as room: \(fallback)")
+        print("🎥 Using phone number as room fallback: \(fallback)")
         return fallback
     }
+    
+    /// Report call action to API
+    private func reportCallAction(_ action: CallAction) {
+        guard let call = currentCall,
+              let scriptId = call.scriptId,
+              let clinicSlug = call.clinicSlug else {
+            print("⚠️ CallKitManager: Cannot report call action - missing required parameters")
+            print("   - Script ID: \(currentCall?.scriptId?.description ?? "nil")")
+            print("   - Clinic Slug: \(currentCall?.clinicSlug ?? "nil")")
+            return
+        }
+        
+        print("📞 CallKitManager: Reporting call action to API: \(action.rawValue)")
+        
+        Task {
+            do {
+                let callActionService = CallActionAPIService()
+                let _ = try await callActionService.reportCallAction(
+                    scriptId: scriptId,
+                    clinicSlug: clinicSlug,
+                    scriptUUID: call.scriptUUID,
+                    action: action
+                )
+                print("✅ CallKitManager: Call action reported successfully")
+            } catch {
+                print("❌ CallKitManager: Failed to report call action: \(error)")
+                // Don't fail the call action if API reporting fails
+            }
+        }
+    }
+    
 }
 
 // MARK: - CXProviderDelegate
@@ -250,6 +337,9 @@ extension CallKitManager: CXProviderDelegate {
         
         // Update call state
         currentCallState = .connected
+        
+        // Report call action to API
+        reportCallAction(.accepted)
         
         // Post notification that call was accepted
         NotificationCenter.default.post(name: .VoIPCallAccepted, object: nil)
@@ -264,14 +354,24 @@ extension CallKitManager: CXProviderDelegate {
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         print("📞 CallKitManager: End call action")
         action.fulfill()
-        
-        // Reset state
+
+        if isEndingForJitsiTransition {
+            // This end was initiated to hand off to Jitsi – do NOT report as rejected or clear call info
+            print("🎥 CallKitManager: End due to Jitsi transition – preserving call info")
+            isEndingForJitsiTransition = false
+            currentCallUUID = nil
+            isInCall = false
+            currentCallState = .ended
+            // Do not post VoIPCallDidEnd here; Jitsi flow will manage lifecycle
+            return
+        }
+
+        // Normal end: report as rejected/ended and clear state
+        reportCallAction(.rejected)
         currentCallUUID = nil
         currentCall = nil
         isInCall = false
         currentCallState = .ended
-        
-        // Post notification that call ended
         NotificationCenter.default.post(name: .VoIPCallDidEnd, object: nil)
     }
     

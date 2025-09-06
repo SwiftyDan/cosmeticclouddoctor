@@ -21,7 +21,16 @@ extension Notification.Name {
 class VoIPPushHandler: NSObject {
     static let shared = VoIPPushHandler()
     
-    private var voipRegistry: PKPushRegistry?
+    // Use a dedicated high-priority queue for VoIP push handling
+    private let voipQueue = DispatchQueue(label: "com.cosmetictech.voip.registry", qos: .userInteractive)
+    
+    private lazy var voipRegistry: PKPushRegistry = {
+        let registry = PKPushRegistry(queue: voipQueue)
+        // Preconfigure desired types immediately so the system starts fetching a token
+        registry.desiredPushTypes = [.voIP]
+        return registry
+    }()
+    
     private let keychain = KeychainService()
     private var isInCall: Bool = false
     private var isCallRinging: Bool = false
@@ -43,7 +52,11 @@ class VoIPPushHandler: NSObject {
 
     override init() {
         super.init()
-        // Don't initialize PushKit registry here - wait for proper app lifecycle
+        print("🚀 VoIPPushHandler initializing...")
+        // IMPORTANT: Set up PushKit delegate immediately on launch (especially when app is launched by VoIP push)
+        setupVoIPPush()
+        // Capability checks can be deferred
+        DispatchQueue.main.async { self.checkAppCapabilities() }
         
         // Observe call state changes
         NotificationCenter.default.addObserver(self, selector: #selector(handleVoIPCallDidEnd), name: .VoIPCallDidEnd, object: nil)
@@ -54,6 +67,68 @@ class VoIPPushHandler: NSObject {
         NotificationCenter.default.removeObserver(self)
     }
     
+    // MARK: - Helper Methods
+    
+    /// Extract script_uuid and clinic_name from conference URL query parameters
+    private func extractScriptDataFromURL(_ urlString: String) -> (scriptUUID: String?, clinicName: String?) {
+        guard let url = URL(string: urlString),
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let queryItems = components.queryItems else {
+            return (nil, nil)
+        }
+        
+        var scriptUUID: String?
+        var clinicName: String?
+        
+        for item in queryItems {
+            switch item.name {
+            case "script_uuid":
+                scriptUUID = item.value
+            case "clinic_name":
+                clinicName = item.value
+            default:
+                break
+            }
+        }
+        
+        print("🔍 Extracted from URL: script_uuid=\(scriptUUID ?? "nil"), clinic_name=\(clinicName ?? "nil")")
+        return (scriptUUID, clinicName)
+    }
+    
+    private func setupVoIPPush() {
+        print("🔧 Setting up VoIP push registry...")
+        voipRegistry.delegate = self
+        voipRegistry.desiredPushTypes = [.voIP]
+        print("✅ VoIP push registry setup completed")
+        print("📱 Requesting VoIP push token...")
+        
+        // Also register for remote notifications
+        DispatchQueue.main.async {
+            UIApplication.shared.registerForRemoteNotifications()
+            print("📱 Registered for remote notifications")
+        }
+    }
+    
+    private func checkAppCapabilities() {
+        print("🔍 Checking app capabilities...")
+        
+        // Check permissions silently; do not show alerts here
+        NotificationService.shared.ensurePermissionsOrPromptSettings(showSettingsAlertIfDenied: false,
+                                                                    requestIfNotDetermined: false)
+        
+        // Check background modes
+        if let backgroundModes = Bundle.main.infoDictionary?["UIBackgroundModes"] as? [String] {
+            print("🔄 Background modes: \(backgroundModes)")
+            if backgroundModes.contains("voip") {
+                print("✅ VoIP background mode enabled")
+            } else {
+                print("❌ VoIP background mode NOT enabled")
+            }
+        } else {
+            print("❌ No background modes found in Info.plist")
+        }
+    }
+    
     // MARK: - Public Methods
     
     /// Initialize VoIP push registry when app is ready
@@ -61,36 +136,57 @@ class VoIPPushHandler: NSObject {
     func initializeVoIPPushRegistry() {
         print("🔄 VoIPPushHandler: Initializing VoIP push registry...")
         
-        // Only initialize if not already done
-        guard voipRegistry == nil else {
-            print("⚠️ VoIPPushHandler: Registry already initialized")
-            return
-        }
-        
-        voipRegistry = PKPushRegistry(queue: DispatchQueue.main)
-        voipRegistry?.delegate = self
-        voipRegistry?.desiredPushTypes = [.voIP]
+        // Registry is already initialized in init(), just ensure it's set up
+        voipRegistry.delegate = self
+        voipRegistry.desiredPushTypes = [.voIP]
         
         print("✅ VoIPPushHandler: VoIP push registry initialized")
     }
     
     /// Refresh VoIP token if needed
     func refreshVoIPToken() {
-        guard let registry = voipRegistry else {
-            print("⚠️ VoIPPushHandler: Cannot refresh token - registry not initialized")
-            return
-        }
-        
         // Force token refresh by re-setting desired push types
-        registry.desiredPushTypes = []
-        registry.desiredPushTypes = [.voIP]
+        voipRegistry.desiredPushTypes = []
+        voipRegistry.desiredPushTypes = [.voIP]
         
         print("🔄 VoIPPushHandler: Requesting VoIP token refresh...")
     }
     
     /// Get current VoIP push token
     func getCurrentVoIPToken() -> String? {
-        return keychain.retrieve(key: "voip_push_token", type: String.self)
+        if let pushCredentials = voipRegistry.pushToken(for: .voIP) {
+            let token = pushCredentials.map { String(format: "%02.2hhx", $0) }.joined()
+            return token
+        }
+        if let cached: String = keychain.retrieve(key: "voip_push_token", type: String.self), !cached.isEmpty {
+            return cached
+        }
+        return nil
+    }
+    
+    func printCurrentVoIPToken() {
+        print("🔍 Checking current VoIP token status...")
+        
+        if let token = getCurrentVoIPToken() {
+            print("🔔 Current VoIP push token: \(token)")
+            print("📱 Token length: \(token.count / 2) bytes")
+        } else {
+            print("❌ No VoIP token available yet")
+            print("🔄 Attempting to refresh VoIP token...")
+            refreshVoIPToken()
+        }
+    }
+    
+    func checkVoIPRegistrationStatus() {
+        print("🔍 Checking VoIP registration status...")
+        print("📱 Desired push types: \(String(describing: voipRegistry.desiredPushTypes))")
+        
+        if let pushToken = voipRegistry.pushToken(for: .voIP) {
+            let token = pushToken.map { String(format: "%02.2hhx", $0) }.joined()
+            print("🔔 Current VoIP token: \(token)")
+        } else {
+            print("❌ No VoIP token available")
+        }
     }
     
     // MARK: - Call Queue Management
@@ -184,7 +280,7 @@ class VoIPPushHandler: NSObject {
         content.title = "📞 Call Queue"
         content.body = "\(callerName) added to queue (\(count) call\(count > 1 ? "s" : "") waiting)"
         content.sound = .default
-        content.badge = NSNumber(value: count)
+        // Don't set badge here - let BadgeManager handle it based on actual queue count
         
         let request = UNNotificationRequest(
             identifier: "VoIPQueue_\(Date().timeIntervalSince1970)",
@@ -207,7 +303,7 @@ class VoIPPushHandler: NSObject {
         content.title = "📞 Call Accepted"
         content.body = "You have \(queuedCount) call\(queuedCount > 1 ? "s" : "") waiting in queue"
         content.sound = .default
-        content.badge = NSNumber(value: queuedCount)
+        // Don't set badge here - let BadgeManager handle it based on actual queue count
         
         let request = UNNotificationRequest(
             identifier: "VoIPAccepted_\(Date().timeIntervalSince1970)",
@@ -272,21 +368,28 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
     
     /// Called when VoIP push token is updated
     func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
-        guard type == .voIP else { return }
+        print("📨 Push credentials updated for type: \(type)")
+        print("📨 Token data length: \(pushCredentials.token.count) bytes")
         
-        let token = pushCredentials.token.map { String(format: "%02.2hhx", $0) }.joined()
-        print("📱 VoIPPushHandler: Received VoIP push token: \(token)")
-        
-        // Store token in keychain for API registration
-        do {
-            try keychain.save(key: "voip_push_token", value: token)
-        } catch {
-            print("❌ VoIPPushHandler: Failed to save VoIP token to keychain: \(error)")
+        if type == .voIP {
+            let token = pushCredentials.token.map { String(format: "%02.2hhx", $0) }.joined()
+            print("🔔 VoIP push token: \(token)")
+            print("📱 Token length: \(pushCredentials.token.count) bytes")
+            print("📋 Copy this token to your Laravel backend for VoIP push notifications")
+            
+            // Store token in keychain for API registration
+            do {
+                try keychain.save(key: "voip_push_token", value: token)
+                print("✅ VoIP token saved to keychain")
+            } catch {
+                print("❌ VoIPPushHandler: Failed to save VoIP token to keychain: \(error)")
+            }
+            
+            // Post notification for token update
+            NotificationCenter.default.post(name: .voipTokenUpdated, object: token)
+        } else {
+            print("⚠️ Received push credentials for non-VoIP type: \(type)")
         }
-        
-        // TODO: Send token to your server for VoIP push notifications
-        // You should implement API call to register this token with your backend
-        registerVoIPTokenWithServer(token: token)
     }
     
     /// Called when VoIP push token becomes invalid
@@ -297,172 +400,216 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
         
         // Remove token from keychain
         keychain.delete(key: "voip_push_token")
-        
-        // TODO: Notify your server that the token is no longer valid
-        unregisterVoIPTokenWithServer()
     }
     
-    /// Called when VoIP push notification is received
-    /// This is the critical method that must report incoming calls to CallKit
+    @available(iOS 11.0, *)
+    func pushRegistry(_ registry: PKPushRegistry,
+                      didReceiveIncomingPushWith payload: PKPushPayload,
+                      for type: PKPushType,
+                      withCompletionHandler completion: @escaping () -> Void) {
+        guard type == .voIP else {
+            completion()
+            return
+        }
+        
+        // CRITICAL: Must report call to CallKit and wait for it to complete
+        // before calling the VoIP push completion handler
+        handleVoIPPush(payload, voipCompletion: completion)
+    }
+
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
         guard type == .voIP else {
             completion()
             return
         }
         
-        print("📞 VoIPPushHandler: Received VoIP push notification")
-        print("📞 Payload: \(payload.dictionaryPayload)")
+        // CRITICAL: Must report call to CallKit and wait for it to complete
+        // before calling the VoIP push completion handler
+        handleVoIPPush(payload, voipCompletion: completion)
+    }
+
+    private func handleVoIPPush(_ payload: PKPushPayload, voipCompletion: (() -> Void)? = nil) {
+        print("📨 Received incoming VoIP push: \(payload.dictionaryPayload)")
         
-        // CRITICAL: We must ALWAYS report a call to CallKit when receiving VoIP push
-        // Even if we plan to reject it, we must report it first to avoid app termination
-        // Apple requires this to prevent abuse of VoIP pushes
+        // CRITICAL: Always report a call to CallKit, even if payload parsing fails
+        // This prevents the app from being terminated by iOS
         
-        // Extract call information from payload
-        // The payload structure shows: additional_data contains the call info
-        guard let additionalData = payload.dictionaryPayload["additional_data"] as? [String: Any] else {
-            print("🚫 VoIPPushHandler: No additional_data in payload")
-            print("🚫 Available keys: \(payload.dictionaryPayload.keys)")
+        // Extract call information from push payload
+        // Support multiple payload formats (new preferred: additional_data)
+        var phoneNumber: String?
+        var displayName: String?
+        var callType: String = "video"
+        var roomId: String?
+        var callHistoryId: Int?
+        var conferenceUrl: String?
+        var roomName: String?
+        var scriptId: Int?
+        var clinicSlug: String?
+        var scriptUUID: String?
+        var clinicName: String?
+
+        if let additional = payload.dictionaryPayload["additional_data"] as? [String: Any] {
+            phoneNumber = payload.dictionaryPayload["caller_id"] as? String
+            displayName = additional["caller_name"] as? String
+            callType = (additional["call_type"] as? String) ?? callType
+            conferenceUrl = additional["conference_url"] as? String
+            roomName = additional["room_name"] as? String
+            clinicSlug = additional["clinic_slug"] as? String
+            scriptUUID = additional["script_uuid"] as? String
+            clinicName = additional["clinic_name"] as? String
+            if let chId = additional["call_history_id"] as? Int { callHistoryId = chId }
+            else if let chStr = additional["call_history_id"] as? String, let chInt = Int(chStr) { callHistoryId = chInt }
+            if let scId = additional["script_id"] as? Int { scriptId = scId }
+            else if let scStr = additional["script_id"] as? String, let scInt = Int(scStr) { scriptId = scInt }
             
-            // CRITICAL: Still must report a call to avoid termination
-            CallKitManager.shared.startIncomingCall(
-                phoneNumber: "unknown",
-                displayName: "Unknown Caller"
-            ) { error in
-                if let error = error {
-                    print("❌ VoIPPushHandler: Failed to report fallback call: \(error)")
-                }
-                // Immediately end the call since payload is invalid
-                CallKitManager.shared.endCall()
+            // Extract script_uuid and clinic_name from conference_url if not present in additional_data
+            if scriptUUID == nil || clinicName == nil, let urlString = conferenceUrl {
+                let extracted = extractScriptDataFromURL(urlString)
+                if scriptUUID == nil { scriptUUID = extracted.scriptUUID }
+                if clinicName == nil { clinicName = extracted.clinicName }
+            }
+        } else if let callData = payload.dictionaryPayload["call_data"] as? [String: Any] {
+            displayName = callData["caller_name"] as? String
+            callType = callData["call_type"] as? String ?? "video"
+            roomId = callData["room_id"] as? String
+            callHistoryId = callData["call_history_id"] as? Int
+            conferenceUrl = callData["conference_url"] as? String
+            roomName = callData["room_name"] as? String
+            scriptId = callData["script_id"] as? Int
+            clinicSlug = callData["clinic_slug"] as? String
+            scriptUUID = callData["script_uuid"] as? String
+            clinicName = callData["clinic_name"] as? String
+            
+            // Extract script_uuid and clinic_name from conference_url if not present in call_data
+            if scriptUUID == nil || clinicName == nil, let urlString = conferenceUrl {
+                let extracted = extractScriptDataFromURL(urlString)
+                if scriptUUID == nil { scriptUUID = extracted.scriptUUID }
+                if clinicName == nil { clinicName = extracted.clinicName }
             }
             
-            completion()
-            return
+            if let callerId = payload.dictionaryPayload["caller_id"] as? String { phoneNumber = callerId }
+        } else if let callData = payload.dictionaryPayload["call"] as? [String: Any] {
+            phoneNumber = callData["phoneNumber"] as? String
+            displayName = callData["displayName"] as? String
+            callType = callData["callType"] as? String ?? "video"
+            roomId = callData["room_id"] as? String
         }
+
+        let phoneNumberFinal = phoneNumber ?? "Unknown"
+        let displayNameFinal = displayName ?? "Unknown"
         
-        // Extract call information from additional_data
-        guard let callerName = additionalData["caller_name"] as? String else {
-            print("🚫 VoIPPushHandler: No caller_name in additional_data")
-            print("🚫 Available additional_data keys: \(additionalData.keys)")
-            
-            // CRITICAL: Still must report a call to avoid termination
-            CallKitManager.shared.startIncomingCall(
-                phoneNumber: "unknown",
-                displayName: "Unknown Caller"
-            ) { error in
-                if let error = error {
-                    print("❌ VoIPPushHandler: Failed to report fallback call: \(error)")
-                }
-                // Immediately end the call since caller name is missing
-                CallKitManager.shared.endCall()
-            }
-            
-            completion()
-            return
-        }
-        
-        // Use caller_id as phone number if available, otherwise use a placeholder
-        let phoneNumber = payload.dictionaryPayload["caller_id"] as? String ?? "unknown"
-        let displayName = callerName
-        
-        // Extract additional call parameters
-        let callType = additionalData["call_type"] as? String ?? "video"
-        // Try both room_id and room_name for compatibility
-        let roomId = additionalData["room_id"] as? String ?? additionalData["room_name"] as? String
-        let callHistoryId = additionalData["call_history_id"] as? Int
-        let conferenceUrl = additionalData["conference_url"] as? String
-        let scriptId = additionalData["script_id"] as? Int
-        let clinicSlug = additionalData["clinic_slug"] as? String
-        
-        print("📞 VoIPPushHandler: Processing incoming call from \(displayName) (\(phoneNumber))")
-        print("📞 Call details: type=\(callType), roomId=\(roomId ?? "nil"), callHistoryId=\(callHistoryId ?? 0)")
-        
+        // Debug log the extracted values
+        print("📱 VoIP Push Parsed Data:")
+        print("   - phoneNumber: \(phoneNumberFinal)")
+        print("   - displayName: \(displayNameFinal)")
+        print("   - callType: \(callType)")
+        print("   - clinicSlug: \(clinicSlug ?? "nil")")
+        print("   - scriptId: \(scriptId?.description ?? "nil")")
+        print("   - roomName: \(roomName ?? "nil")")
+        print("   - conferenceUrl: \(conferenceUrl ?? "nil")")
+        print("   - scriptUUID: \(scriptUUID ?? "nil")")
+        print("   - clinicName: \(clinicName ?? "nil")")
+
         // Check if we're already in a call or have a call ringing
         if isInCall || isCallRinging {
             print("📞 VoIPPushHandler: Call already in progress or ringing - queuing this call")
             enqueuePendingCall(
+                phoneNumber: phoneNumberFinal,
+                displayName: displayNameFinal,
+                callType: callType,
+                roomId: roomId ?? roomName,
+                callHistoryId: callHistoryId,
+                conferenceUrl: conferenceUrl,
+                scriptId: scriptId,
+                clinicSlug: clinicSlug
+            )
+            voipCompletion?()
+            return
+        }
+
+        // Report call to CallKit synchronously
+        reportCallToCallKit(phoneNumber: phoneNumberFinal,
+                            displayName: displayNameFinal,
+                            callType: callType,
+                            roomId: roomId,
+                            callHistoryId: callHistoryId,
+                            conferenceUrl: conferenceUrl,
+                            roomName: roomName,
+                            scriptId: scriptId,
+                            clinicSlug: clinicSlug,
+                            scriptUUID: scriptUUID,
+                            clinicName: clinicName,
+                            voipCompletion: voipCompletion)
+    }
+    
+    private func reportCallToCallKit(phoneNumber: String,
+                                     displayName: String,
+                                     callType: String,
+                                     roomId: String?,
+                                     callHistoryId: Int?,
+                                     conferenceUrl: String?,
+                                     roomName: String?,
+                                     scriptId: Int?,
+                                     clinicSlug: String?,
+                                     scriptUUID: String?,
+                                     clinicName: String?,
+                                     voipCompletion: (() -> Void)?) {
+        // CRITICAL: Report call to CallKit and wait for completion
+        // This ensures iOS doesn't terminate the app for unhandled VoIP pushes
+        if Thread.isMainThread {
+            CallKitManager.shared.startIncomingCall(
                 phoneNumber: phoneNumber,
                 displayName: displayName,
                 callType: callType,
                 roomId: roomId,
                 callHistoryId: callHistoryId,
                 conferenceUrl: conferenceUrl,
+                roomName: roomName,
                 scriptId: scriptId,
-                clinicSlug: clinicSlug
-            )
-            completion()
-            return
-        }
-        
-        // CRITICAL: Always report call to CallKit first, then validate user
-        // This prevents iOS from terminating the app
-        CallKitManager.shared.startIncomingCall(
-            phoneNumber: phoneNumber,
-            displayName: displayName,
-            callType: callType,
-            roomId: roomId,
-            callHistoryId: callHistoryId,
-            conferenceUrl: conferenceUrl,
-            roomName: roomId, // Use roomId as roomName for now
-            scriptId: scriptId,
-            clinicSlug: clinicSlug
-        ) { error in
-            if let error = error {
-                print("❌ VoIPPushHandler: Failed to report call to CallKit: \(error)")
-            } else {
-                print("✅ VoIPPushHandler: Call reported to CallKit successfully")
-                
-                // Mark as ringing
-                self.isCallRinging = true
-                
-                // Now validate user - if validation fails, end the call
-                if !self.validateUserForCall() {
-                    print("🚫 VoIPPushHandler: User validation failed after reporting call - ending call")
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        CallKitManager.shared.endCall()
+                clinicSlug: clinicSlug,
+                scriptUUID: scriptUUID,
+                clinicName: clinicName
+            ) { error in
+                // Call VoIP completion handler after CallKit is notified
+                // CRITICAL: Must call completion even on error to prevent crash
+                if let voipCompletion = voipCompletion {
+                    voipCompletion()
+                }
+            }
+        } else {
+            DispatchQueue.main.sync {
+                CallKitManager.shared.startIncomingCall(
+                    phoneNumber: phoneNumber,
+                    displayName: displayName,
+                    callType: callType,
+                    roomId: roomId,
+                    callHistoryId: callHistoryId,
+                    conferenceUrl: conferenceUrl,
+                    roomName: roomName,
+                    scriptId: scriptId,
+                    clinicSlug: clinicSlug,
+                    scriptUUID: scriptUUID,
+                    clinicName: clinicName
+                ) { error in
+                    // Call VoIP completion handler after CallKit is notified
+                    // CRITICAL: Must call completion even on error to prevent crash
+                    if let voipCompletion = voipCompletion {
+                        voipCompletion()
                     }
                 }
             }
         }
-        
-        // Complete the handler to tell the system we've processed the push
-        completion()
     }
     
     // MARK: - Private Methods
     
     /// Register VoIP token with your server
     private func registerVoIPTokenWithServer(token: String) {
-        // TODO: Implement API call to register VoIP token with your backend
-        print("🔄 VoIPPushHandler: Should register token with server: \(token)")
-        
-        // Example implementation:
-        /*
-        Task {
-            do {
-                try await APIService.shared.registerVoIPToken(token)
-                print("✅ VoIPPushHandler: Token registered with server")
-            } catch {
-                print("❌ VoIPPushHandler: Failed to register token: \(error)")
-            }
-        }
-        */
+    
     }
     
     /// Unregister VoIP token from your server
     private func unregisterVoIPTokenWithServer() {
-        // TODO: Implement API call to unregister VoIP token from your backend
-        print("🔄 VoIPPushHandler: Should unregister token from server")
-        
-        // Example implementation:
-        /*
-        Task {
-            do {
-                try await APIService.shared.unregisterVoIPToken()
-                print("✅ VoIPPushHandler: Token unregistered from server")
-            } catch {
-                print("❌ VoIPPushHandler: Failed to unregister token: \(error)")
-            }
-        }
-        */
+      
     }
 }

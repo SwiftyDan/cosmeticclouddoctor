@@ -132,7 +132,9 @@ struct JitsiMeetViewWrapper: UIViewRepresentable {
             jitsiView.leave()
         }
         // Deactivate call audio session when view is dismantled
-        AudioService.shared.deactivateCallAudioSession()
+        DispatchQueue.main.async {
+            AudioService.shared.deactivateCallAudioSession()
+        }
         
         // Only trigger queue removal if user intentionally ended the call
         // This prevents queue removal when switching tabs or going to background
@@ -177,7 +179,9 @@ struct JitsiMeetViewWrapper: UIViewRepresentable {
             isUserEndingCall = true
             
             // Deactivate call audio session when meeting ends
-            AudioService.shared.deactivateCallAudioSession()
+            DispatchQueue.main.async {
+                AudioService.shared.deactivateCallAudioSession()
+            }
             parent.onConferenceTerminated?()
             
             // Trigger queue list API refresh when meeting ends
@@ -196,7 +200,9 @@ struct JitsiMeetViewWrapper: UIViewRepresentable {
             isUserEndingCall = true
             
             // Deactivate call audio session when meeting is about to end
-            AudioService.shared.deactivateCallAudioSession()
+            DispatchQueue.main.async {
+                AudioService.shared.deactivateCallAudioSession()
+            }
             // Trigger the onEndCall callback to handle queue item removal
             if let onEndCall = parent.onEndCall {
                 print("🎥 Native end call button pressed, triggering onEndCall callback")
