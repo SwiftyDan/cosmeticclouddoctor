@@ -43,8 +43,11 @@ class VoIPPushHandler: NSObject {
         let roomId: String?
         let callHistoryId: Int?
         let conferenceUrl: String?
+        let roomName: String?
         let scriptId: Int?
         let clinicSlug: String?
+        let scriptUUID: String?
+        let clinicName: String?
         let timestamp: Date
     }
     private var pendingCalls: [PendingCall] = []
@@ -192,7 +195,7 @@ class VoIPPushHandler: NSObject {
     // MARK: - Call Queue Management
     
     /// Helper to enqueue a call from parsed payload data
-    private func enqueuePendingCall(phoneNumber: String, displayName: String, callType: String, roomId: String?, callHistoryId: Int?, conferenceUrl: String?, scriptId: Int?, clinicSlug: String?) {
+    private func enqueuePendingCall(phoneNumber: String, displayName: String, callType: String, roomId: String?, callHistoryId: Int?, conferenceUrl: String?, roomName: String?, scriptId: Int?, clinicSlug: String?, scriptUUID: String?, clinicName: String?) {
         let newCall = PendingCall(
             phoneNumber: phoneNumber,
             displayName: displayName,
@@ -200,8 +203,11 @@ class VoIPPushHandler: NSObject {
             roomId: roomId,
             callHistoryId: callHistoryId,
             conferenceUrl: conferenceUrl,
+            roomName: roomName,
             scriptId: scriptId,
             clinicSlug: clinicSlug,
+            scriptUUID: scriptUUID,
+            clinicName: clinicName,
             timestamp: Date()
         )
         
@@ -230,10 +236,22 @@ class VoIPPushHandler: NSObject {
                     roomId: next.roomId,
                     callHistoryId: next.callHistoryId,
                     conferenceUrl: next.conferenceUrl,
-                    roomName: next.roomId,
+                    roomName: next.roomName,
                     scriptId: next.scriptId,
                     clinicSlug: next.clinicSlug
                 )
+            }
+        }
+    }
+    
+    /// Clear queued calls that were queued during Jitsi meetings
+    private func clearQueuedCallsFromJitsi() {
+        pendingQueue.async {
+            let clearedCount = self.pendingCalls.count
+            self.pendingCalls.removeAll()
+            
+            if clearedCount > 0 {
+                print("🎥 VoIPPushHandler: Cleared \(clearedCount) queued calls that were queued during Jitsi meeting")
             }
         }
     }
@@ -244,14 +262,68 @@ class VoIPPushHandler: NSObject {
         self.isCallRinging = isRinging
     }
     
+    /// Show push notification when Jitsi meeting is active
+    private func showPushNotificationForJitsiCall(callerName: String, callerId: String, scriptId: Int?, clinicSlug: String?) {
+        print("📱 VoIPPushHandler: Showing push notification for Jitsi call from \(callerName)")
+        
+        let content = UNMutableNotificationContent()
+        content.title = "Incoming Call"
+        content.body = "\(callerName) is calling you"
+        content.sound = UNNotificationSound(named: UNNotificationSoundName("ringtone.caf"))
+        content.badge = 1
+        content.categoryIdentifier = "INCOMING_CALL"
+        
+        // Add call data to userInfo for potential handling
+        var userInfo: [String: Any] = [
+            "caller_name": callerName,
+            "caller_id": callerId,
+            "call_type": "video"
+        ]
+        
+        if let scriptId = scriptId {
+            userInfo["script_id"] = scriptId
+        }
+        if let clinicSlug = clinicSlug {
+            userInfo["clinic_slug"] = clinicSlug
+        }
+        
+        content.userInfo = userInfo
+        
+        let request = UNNotificationRequest(
+            identifier: "jitsi_call_\(Date().timeIntervalSince1970)",
+            content: content,
+            trigger: nil
+        )
+        
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("❌ Failed to show push notification for Jitsi call: \(error)")
+            } else {
+                print("✅ Push notification shown for Jitsi call from \(callerName)")
+            }
+        }
+    }
+    
     // MARK: - VoIP Call State Handling
     
     @objc private func handleVoIPCallDidEnd(_ notification: Notification) {
         print("🔔 VoIPPushHandler: Received VoIPCallDidEnd notification")
-        // Reset in-call state and present next queued call if any
+        // Reset in-call state
         isInCall = false
         isCallRinging = false
-        dequeueAndPresentNextIfAny()
+        
+        // Check if this is from a Jitsi meeting ending
+        // If so, clear queued calls instead of processing them
+        Task { @MainActor in
+            if GlobalJitsiManager.shared.isPresentingJitsi {
+                print("🎥 VoIPPushHandler: Jitsi meeting is still active - not processing queued calls")
+                return
+            }
+            
+            // If Jitsi is not active, clear any queued calls that were queued during Jitsi
+            // and only process queued calls that were queued for normal call conflicts
+            self.clearQueuedCallsFromJitsi()
+        }
     }
     
     @objc private func handleVoIPCallAccepted(_ notification: Notification) {
@@ -372,17 +444,17 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
         print("📨 Token data length: \(pushCredentials.token.count) bytes")
         
         if type == .voIP {
-            let token = pushCredentials.token.map { String(format: "%02.2hhx", $0) }.joined()
+        let token = pushCredentials.token.map { String(format: "%02.2hhx", $0) }.joined()
             print("🔔 VoIP push token: \(token)")
             print("📱 Token length: \(pushCredentials.token.count) bytes")
             print("📋 Copy this token to your Laravel backend for VoIP push notifications")
-            
-            // Store token in keychain for API registration
-            do {
-                try keychain.save(key: "voip_push_token", value: token)
+        
+        // Store token in keychain for API registration
+        do {
+            try keychain.save(key: "voip_push_token", value: token)
                 print("✅ VoIP token saved to keychain")
-            } catch {
-                print("❌ VoIPPushHandler: Failed to save VoIP token to keychain: \(error)")
+        } catch {
+            print("❌ VoIPPushHandler: Failed to save VoIP token to keychain: \(error)")
             }
             
             // Post notification for token update
@@ -402,20 +474,6 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
         keychain.delete(key: "voip_push_token")
     }
     
-    @available(iOS 11.0, *)
-    func pushRegistry(_ registry: PKPushRegistry,
-                      didReceiveIncomingPushWith payload: PKPushPayload,
-                      for type: PKPushType,
-                      withCompletionHandler completion: @escaping () -> Void) {
-        guard type == .voIP else {
-            completion()
-            return
-        }
-        
-        // CRITICAL: Must report call to CallKit and wait for it to complete
-        // before calling the VoIP push completion handler
-        handleVoIPPush(payload, voipCompletion: completion)
-    }
 
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
         guard type == .voIP else {
@@ -510,7 +568,7 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
         print("   - scriptUUID: \(scriptUUID ?? "nil")")
         print("   - clinicName: \(clinicName ?? "nil")")
 
-        // Check if we're already in a call or have a call ringing
+        // Check if we're already in a call, have a call ringing, or in a Jitsi meeting
         if isInCall || isCallRinging {
             print("📞 VoIPPushHandler: Call already in progress or ringing - queuing this call")
             enqueuePendingCall(
@@ -520,26 +578,44 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
                 roomId: roomId ?? roomName,
                 callHistoryId: callHistoryId,
                 conferenceUrl: conferenceUrl,
+                roomName: roomName,
                 scriptId: scriptId,
-                clinicSlug: clinicSlug
+                clinicSlug: clinicSlug,
+                scriptUUID: scriptUUID,
+                clinicName: clinicName
             )
             voipCompletion?()
             return
         }
-
-        // Report call to CallKit synchronously
-        reportCallToCallKit(phoneNumber: phoneNumberFinal,
-                            displayName: displayNameFinal,
-                            callType: callType,
-                            roomId: roomId,
-                            callHistoryId: callHistoryId,
-                            conferenceUrl: conferenceUrl,
-                            roomName: roomName,
-                            scriptId: scriptId,
-                            clinicSlug: clinicSlug,
-                            scriptUUID: scriptUUID,
-                            clinicName: clinicName,
-                            voipCompletion: voipCompletion)
+        
+        // Check if Jitsi meeting is currently active
+        DispatchQueue.main.async {
+            if GlobalJitsiManager.shared.isPresentingJitsi {
+                print("🎥 VoIPPushHandler: Jitsi meeting is active - showing push notification instead of CallKit call")
+                self.showPushNotificationForJitsiCall(
+                    callerName: displayNameFinal,
+                    callerId: phoneNumberFinal,
+                    scriptId: scriptId,
+                    clinicSlug: clinicSlug
+                )
+                voipCompletion?()
+                return
+            }
+            
+            // If Jitsi is not active, proceed with normal CallKit flow
+            self.reportCallToCallKit(phoneNumber: phoneNumberFinal,
+                                   displayName: displayNameFinal,
+                                   callType: callType,
+                                   roomId: roomId ?? roomName,
+                                   callHistoryId: callHistoryId,
+                                   conferenceUrl: conferenceUrl,
+                                   roomName: roomName,
+                                   scriptId: scriptId,
+                                   clinicSlug: clinicSlug,
+                                   scriptUUID: scriptUUID,
+                                   clinicName: clinicName,
+                                   voipCompletion: voipCompletion)
+        }
     }
     
     private func reportCallToCallKit(phoneNumber: String,
@@ -557,26 +633,26 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
         // CRITICAL: Report call to CallKit and wait for completion
         // This ensures iOS doesn't terminate the app for unhandled VoIP pushes
         if Thread.isMainThread {
-            CallKitManager.shared.startIncomingCall(
-                phoneNumber: phoneNumber,
-                displayName: displayName,
-                callType: callType,
-                roomId: roomId,
-                callHistoryId: callHistoryId,
-                conferenceUrl: conferenceUrl,
+        CallKitManager.shared.startIncomingCall(
+            phoneNumber: phoneNumber,
+            displayName: displayName,
+            callType: callType,
+            roomId: roomId,
+            callHistoryId: callHistoryId,
+            conferenceUrl: conferenceUrl,
                 roomName: roomName,
-                scriptId: scriptId,
+            scriptId: scriptId,
                 clinicSlug: clinicSlug,
                 scriptUUID: scriptUUID,
                 clinicName: clinicName
-            ) { error in
+        ) { error in
                 // Call VoIP completion handler after CallKit is notified
                 // CRITICAL: Must call completion even on error to prevent crash
                 if let voipCompletion = voipCompletion {
                     voipCompletion()
                 }
             }
-        } else {
+            } else {
             DispatchQueue.main.sync {
                 CallKitManager.shared.startIncomingCall(
                     phoneNumber: phoneNumber,

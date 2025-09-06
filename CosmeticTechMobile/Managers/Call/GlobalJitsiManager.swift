@@ -31,8 +31,8 @@ class GlobalJitsiManager: ObservableObject {
     func presentJitsi(with parameters: JitsiParameters) {
         print("🎥 GlobalJitsiManager: Presenting Jitsi meeting")
         print("   - Room: \(parameters.roomName)")
-        print("   - Display Name: \(parameters.displayName)")
-        print("   - Conference URL: \(parameters.conferenceUrl)")
+        print("   - Display Name: \(parameters.displayName ?? "nil")")
+        print("   - Conference URL: \(parameters.conferenceUrl ?? "nil")")
         
         jitsiParameters = parameters
         isPresentingJitsi = true
@@ -43,6 +43,10 @@ class GlobalJitsiManager: ObservableObject {
         print("🎥 GlobalJitsiManager: Dismissing Jitsi meeting")
         isPresentingJitsi = false
         jitsiParameters = nil
+        
+        // Notify VoIP push handler that Jitsi meeting has ended
+        // This allows new VoIP calls to be processed normally
+        NotificationCenter.default.post(name: .VoIPCallDidEnd, object: nil)
     }
     
     /// End call and dismiss Jitsi meeting
