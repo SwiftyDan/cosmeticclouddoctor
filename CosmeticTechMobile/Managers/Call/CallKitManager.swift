@@ -148,6 +148,9 @@ class CallKitManager: NSObject, ObservableObject {
                 print("✅ CallKitManager: Has video: \(update.hasVideo)")
                 self.isInCall = true
                 self.currentCallState = .incoming
+                
+                // Notify VoIPPushHandler that call is ringing
+                VoIPPushHandler.shared.setCallState(isInCall: true, isRinging: true)
             }
             print("📞 CallKitManager: Calling completion handler")
             completion?(error)
@@ -367,6 +370,9 @@ extension CallKitManager: CXProviderDelegate {
         // Update call state
         currentCallState = .connected
         
+        // Reset ringing state
+        VoIPPushHandler.shared.setCallState(isInCall: true, isRinging: false)
+        
         // Report call action to API
         reportCallAction(.accepted)
         
@@ -395,12 +401,21 @@ extension CallKitManager: CXProviderDelegate {
             return
         }
 
-        // Normal end: report as rejected/ended and clear state
-        reportCallAction(.rejected)
+        // Normal end: report as rejected/ended BEFORE clearing state
+        // This ensures we have the call data when reporting the action
+        if currentCall != nil {
+            reportCallAction(.rejected)
+        }
+        
+        // Clear state after reporting
         currentCallUUID = nil
         currentCall = nil
         isInCall = false
         currentCallState = .ended
+        
+        // Reset VoIPPushHandler call state
+        VoIPPushHandler.shared.setCallState(isInCall: false, isRinging: false)
+        
         NotificationCenter.default.post(name: .VoIPCallDidEnd, object: nil)
     }
     
@@ -430,6 +445,9 @@ extension CallKitManager: CXProviderDelegate {
         currentCall = nil
         isInCall = false
         currentCallState = .idle
+        
+        // Reset VoIPPushHandler call state
+        VoIPPushHandler.shared.setCallState(isInCall: false, isRinging: false)
     }
 }
 

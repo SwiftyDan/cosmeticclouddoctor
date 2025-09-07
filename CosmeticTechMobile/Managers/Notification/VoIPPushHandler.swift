@@ -445,6 +445,9 @@ class VoIPPushHandler: NSObject {
             // If Jitsi is not active, clear any queued calls that were queued during Jitsi
             // and only process queued calls that were queued for normal call conflicts
             self.clearQueuedCallsFromJitsi()
+            
+            // Process any pending calls that were queued
+            self.dequeueAndPresentNextIfAny()
         }
     }
     
