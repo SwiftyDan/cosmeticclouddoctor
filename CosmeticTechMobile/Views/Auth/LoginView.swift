@@ -18,8 +18,11 @@ struct CustomTextFieldStyle: TextFieldStyle {
 
 struct LoginView: View {
     @StateObject private var viewModel: LoginViewModel
+    @StateObject private var environmentManager = EnvironmentManager.shared
     @EnvironmentObject private var authManager: AuthManager
     private let deviceService = DeviceOrientationService.shared
+    @State private var tapCount = 0
+    @State private var showingEnvironmentAlert = false
     
     init() {
         // Initialize with a temporary AuthManager, will be updated in onAppear
@@ -41,6 +44,20 @@ struct LoginView: View {
                             .scaledToFit()
                             .frame(width: deviceService.isIPad ? 128 : 96, height: deviceService.isIPad ? 128 : 96)
                             .clipShape(RoundedRectangle(cornerRadius: deviceService.cornerRadius, style: .continuous))
+                            .onTapGesture {
+                                tapCount += 1
+                                if tapCount >= 5 {
+                                    // Switch to development environment
+                                    environmentManager.forceSetEnvironment(.development)
+                                    showingEnvironmentAlert = true
+                                    tapCount = 0
+                                } else {
+                                    // Reset tap count after 2 seconds
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                                        tapCount = 0
+                                    }
+                                }
+                            }
                         
                         Text("Cosmetic Cloud VC")
                             .font(.system(size: deviceService.isIPad ? 42 : 34, weight: .bold))
@@ -326,6 +343,11 @@ struct LoginView: View {
                 // AuthManager will handle navigation automatically
                 print("✅ Login successful, navigating to main app")
             }
+        }
+        .alert("Environment Switched", isPresented: $showingEnvironmentAlert) {
+            Button("OK") { }
+        } message: {
+            Text("Environment switched to Development. API URL: \(environmentManager.currentAPIURL)")
         }
     }
 }

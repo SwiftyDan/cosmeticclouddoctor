@@ -288,18 +288,33 @@ class NetworkService: NetworkServiceProtocol {
             // Log response if enabled
             logResponse(httpResponse, data: data)
             
+            // Check if response is HTML (login page) instead of JSON
+            let contentType = httpResponse.allHeaderFields["Content-Type"] as? String ?? ""
+            let isHTMLResponse = contentType.contains("text/html") || 
+                                (data.count > 0 && String(data: data.prefix(100), encoding: .utf8)?.contains("<!DOCTYPE html>") == true)
+            
             // Handle HTTP status codes
             switch httpResponse.statusCode {
             case 200...299:
+                // Even for successful status codes, check if we got an HTML login page
+                if isHTMLResponse {
+                    logger.warning("🚨 Received HTML login page instead of JSON response (status: \(httpResponse.statusCode))")
+                    DispatchQueue.main.async {
+                        NotificationCenter.default.post(name: NSNotification.Name("UnauthorizedResponse"), object: nil)
+                    }
+                    throw NetworkError.unauthorized
+                }
                 break
             case 401:
                 // Trigger automatic logout for unauthorized response
+                logger.warning("🚨 Unauthorized response detected (401)")
                 DispatchQueue.main.async {
                     NotificationCenter.default.post(name: NSNotification.Name("UnauthorizedResponse"), object: nil)
                 }
                 throw NetworkError.unauthorized
             case 403:
                 // Trigger automatic logout for forbidden response
+                logger.warning("🚨 Forbidden response detected (403)")
                 DispatchQueue.main.async {
                     NotificationCenter.default.post(name: NSNotification.Name("UnauthorizedResponse"), object: nil)
                 }
@@ -328,6 +343,16 @@ class NetworkService: NetworkServiceProtocol {
                 let decodedResponse = try JSONDecoder().decode(T.self, from: data)
                 return decodedResponse
             } catch {
+                // Check if the response contains an "Unauthenticated" message
+                if let responseString = String(data: data, encoding: .utf8),
+                   responseString.contains("\"message\":\"Unauthenticated.\"") {
+                    logger.warning("🚨 Received 'Unauthenticated' message from server")
+                    DispatchQueue.main.async {
+                        NotificationCenter.default.post(name: NSNotification.Name("UnauthorizedResponse"), object: nil)
+                    }
+                    throw NetworkError.unauthorized
+                }
+                
                 logger.error("Failed to decode response: \(error.localizedDescription)")
                 throw NetworkError.decodingError
             }
@@ -373,7 +398,19 @@ class NetworkService: NetworkServiceProtocol {
         let statusEmoji = (200...299).contains(response.statusCode) ? "✅" : "❌"
         logger.info("\(statusEmoji) Response: \(response.statusCode) - \(response.url?.absoluteString ?? "NO_URL")")
         
-        if let responseData = String(data: data, encoding: .utf8), !responseData.isEmpty {
+        // Check if response is HTML
+        let contentType = response.allHeaderFields["Content-Type"] as? String ?? ""
+        let isHTMLResponse = contentType.contains("text/html") || 
+                            (data.count > 0 && String(data: data.prefix(100), encoding: .utf8)?.contains("<!DOCTYPE html>") == true)
+        
+        if isHTMLResponse {
+            let sizeKB = Double(data.count) / 1024.0
+            logger.warning("📄 Response Data: HTML Login Page (size: \(String(format: "%.1fKB", sizeKB)))")
+            logger.warning("🚨 Content-Type: \(contentType)")
+            // Log first 200 characters of HTML to help debug
+            let preview = String(data: data.prefix(200), encoding: .utf8) ?? "Unable to decode"
+            logger.warning("📄 HTML Preview: \(preview)")
+        } else if let responseData = String(data: data, encoding: .utf8), !responseData.isEmpty {
             logger.debug("📥 Response Data: \(responseData)")
         }
     }

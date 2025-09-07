@@ -38,10 +38,10 @@ struct UserProfileView: View {
                 .padding(deviceService.isIPad ? 32 : 20)
                 .frame(maxWidth: deviceService.maxContentWidth)
                 .frame(maxWidth: .infinity)
-            }
-            .navigationTitle("Profile")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar { }
+        }
+        .navigationTitle("Profile")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar { }
         }
 
     }

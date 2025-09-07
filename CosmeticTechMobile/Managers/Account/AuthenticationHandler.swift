@@ -41,6 +41,7 @@ class AuthenticationHandler: ObservableObject {
     // MARK: - Handle Unauthorized Response
     @objc private func handleUnauthorizedResponse() {
         logger.warning("🚨 Unauthorized response detected, logging out user")
+        logger.warning("🔍 Current auth state - isLoggedIn: \(self.authManager?.isLoggedIn ?? false)")
         
         Task {
             await performLogout()
@@ -55,9 +56,13 @@ class AuthenticationHandler: ObservableObject {
         }
         
         logger.info("🔐 Performing automatic logout due to unauthorized response")
+        logger.info("🔍 Auth state before logout - isLoggedIn: \(authManager.isLoggedIn)")
         
         // Perform logout through AuthManager
         await authManager.logout()
+        
+        // Verify logout was successful
+        logger.info("🔍 Auth state after logout - isLoggedIn: \(authManager.isLoggedIn)")
         
         // Post notification that logout is complete
         NotificationCenter.default.post(name: NSNotification.Name("UserLoggedOut"), object: nil)

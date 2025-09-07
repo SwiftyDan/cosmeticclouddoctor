@@ -61,14 +61,34 @@ class VoIPPushHandler: NSObject {
     override init() {
         super.init()
         print("🚀 VoIPPushHandler initializing...")
+        print("📱 App state: \(UIApplication.shared.applicationState.rawValue) (\(UIApplication.shared.applicationState == .background ? "background" : UIApplication.shared.applicationState == .inactive ? "inactive" : "active"))")
+        print("🎯 Launch reason: \(CommandLine.arguments.joined(separator: " "))")
+
         // IMPORTANT: Set up PushKit delegate immediately on launch (especially when app is launched by VoIP push)
         setupVoIPPush()
         // Capability checks can be deferred
         DispatchQueue.main.async { self.checkAppCapabilities() }
-        
+
         // Observe call state changes
         NotificationCenter.default.addObserver(self, selector: #selector(handleVoIPCallDidEnd), name: .VoIPCallDidEnd, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(handleVoIPCallAccepted), name: .VoIPCallAccepted, object: nil)
+
+        // Log notification center observers for debugging
+        print("👂 Registered notification observers: VoIPCallDidEnd, VoIPCallAccepted")
+
+        // CRITICAL: For background/closed app scenarios, ensure immediate setup
+        if UIApplication.shared.applicationState != .active {
+            print("🚨 App not active - ensuring immediate VoIP setup")
+            DispatchQueue.main.async {
+                self.forceTokenRenewal()
+                self.verifyVoIPTokenStatus()
+            }
+        } else {
+            // Verify VoIP setup after initialization for active app
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                self.verifyVoIPTokenStatus()
+            }
+        }
     }
     
     deinit {
@@ -105,6 +125,9 @@ class VoIPPushHandler: NSObject {
     
     private func setupVoIPPush() {
         print("🔧 Setting up VoIP push registry...")
+        print("   📱 Current thread: \(Thread.isMainThread ? "Main" : "Background")")
+        print("   📱 App state: \(UIApplication.shared.applicationState.rawValue)")
+        
         voipRegistry.delegate = self
         voipRegistry.desiredPushTypes = [.voIP]
         print("✅ VoIP push registry setup completed")
@@ -114,6 +137,11 @@ class VoIPPushHandler: NSObject {
         DispatchQueue.main.async {
             UIApplication.shared.registerForRemoteNotifications()
             print("📱 Registered for remote notifications")
+        }
+        
+        // Force immediate token request for background scenarios
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.forceTokenRenewal()
         }
     }
     
@@ -201,6 +229,7 @@ class VoIPPushHandler: NSObject {
     // MARK: - Enhanced Monitoring Methods
 
     /// Get comprehensive VoIP status for debugging
+    @MainActor
     func getVoIPStatus() -> [String: Any] {
         var status: [String: Any] = [:]
 
@@ -230,15 +259,14 @@ class VoIPPushHandler: NSObject {
         status["total_voip_pushes"] = voipPushCount
         status["last_token_refresh"] = lastVoIPTokenRefresh?.description ?? "never"
 
-        // Jitsi state check
-        DispatchQueue.main.sync {
-            status["jitsi_active"] = GlobalJitsiManager.shared.isPresentingJitsi
-        }
+        // Jitsi state check - we're already on main actor
+        status["jitsi_active"] = GlobalJitsiManager.shared.isPresentingJitsi
 
         return status
     }
 
     /// Print detailed VoIP status for debugging
+    @MainActor
     func printVoIPStatus() {
         let status = getVoIPStatus()
         print("🔍 ===== VoIP STATUS REPORT =====")
@@ -546,13 +574,16 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
         // Store token in keychain for API registration
         do {
             try keychain.save(key: "voip_push_token", value: token)
-                print("✅ VoIP token saved to keychain")
+            print("✅ VoIP token saved to keychain")
+
+            // Register token with server
+            registerVoIPTokenWithServer(token: token)
         } catch {
             print("❌ VoIPPushHandler: Failed to save VoIP token to keychain: \(error)")
-            }
-            
-            // Post notification for token update
-            NotificationCenter.default.post(name: .voipTokenUpdated, object: token)
+        }
+
+        // Post notification for token update
+        NotificationCenter.default.post(name: .voipTokenUpdated, object: token)
         } else {
             print("⚠️ Received push credentials for non-VoIP type: \(type)")
         }
@@ -569,17 +600,34 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
     }
     
 
+    @MainActor
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
+        print("📨 VoIP PUSH RECEIVED!")
+        print("   🔔 Push type: \(type)")
+        print("   📊 Payload size: \(payload.dictionaryPayload.count) keys")
+        print("   ⏰ Timestamp: \(Date())")
+        print("   🧵 Current thread: \(Thread.isMainThread ? "Main" : "Background")")
+
         guard type == .voIP else {
+            print("⚠️ Ignoring non-VoIP push type: \(type)")
             completion()
             return
         }
-        
-        // CRITICAL: Must report call to CallKit and wait for it to complete
-        // before calling the VoIP push completion handler
-        handleVoIPPush(payload, voipCompletion: completion)
+
+        print("✅ Processing VoIP push notification")
+
+        // CRITICAL: Handle VoIP push synchronously on main thread
+        // Apple requires immediate CallKit reporting to prevent app termination
+        if Thread.isMainThread {
+            self.handleVoIPPush(payload, voipCompletion: completion)
+        } else {
+            DispatchQueue.main.sync {
+                self.handleVoIPPush(payload, voipCompletion: completion)
+            }
+        }
     }
 
+    @MainActor
     private func handleVoIPPush(_ payload: PKPushPayload, voipCompletion: (() -> Void)? = nil) {
         voipPushCount += 1
         let pushId = "voip_\(Date().timeIntervalSince1970)"
@@ -692,33 +740,32 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
         }
         
         // Check if Jitsi meeting is currently active
-        DispatchQueue.main.async {
-            if GlobalJitsiManager.shared.isPresentingJitsi {
-                print("🎥 VoIPPushHandler: Jitsi meeting is active - showing push notification instead of CallKit call")
-                self.showPushNotificationForJitsiCall(
-                    callerName: displayNameFinal,
-                    callerId: phoneNumberFinal,
-                    scriptId: scriptId,
-                    clinicSlug: clinicSlug
-                )
-                voipCompletion?()
-                return
-            }
-            
-            // If Jitsi is not active, proceed with normal CallKit flow
-            self.reportCallToCallKit(phoneNumber: phoneNumberFinal,
-                                   displayName: displayNameFinal,
-                                   callType: callType,
-                                   roomId: roomId ?? roomName,
-                                   callHistoryId: callHistoryId,
-                                   conferenceUrl: conferenceUrl,
-                                   roomName: roomName,
-                                   scriptId: scriptId,
-                                   clinicSlug: clinicSlug,
-                                   scriptUUID: scriptUUID,
-                                   clinicName: clinicName,
-                                   voipCompletion: voipCompletion)
+        // CRITICAL: Must be synchronous to prevent app termination
+        if GlobalJitsiManager.shared.isPresentingJitsi {
+            print("🎥 VoIPPushHandler: Jitsi meeting is active - showing push notification instead of CallKit call")
+            self.showPushNotificationForJitsiCall(
+                callerName: displayNameFinal,
+                callerId: phoneNumberFinal,
+                scriptId: scriptId,
+                clinicSlug: clinicSlug
+            )
+            voipCompletion?()
+            return
         }
+        
+        // If Jitsi is not active, proceed with normal CallKit flow
+        self.reportCallToCallKit(phoneNumber: phoneNumberFinal,
+                               displayName: displayNameFinal,
+                               callType: callType,
+                               roomId: roomId ?? roomName,
+                               callHistoryId: callHistoryId,
+                               conferenceUrl: conferenceUrl,
+                               roomName: roomName,
+                               scriptId: scriptId,
+                               clinicSlug: clinicSlug,
+                               scriptUUID: scriptUUID,
+                               clinicName: clinicName,
+                               voipCompletion: voipCompletion)
     }
     
     private func reportCallToCallKit(phoneNumber: String,
@@ -733,9 +780,15 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
                                      scriptUUID: String?,
                                      clinicName: String?,
                                      voipCompletion: (() -> Void)?) {
-        // CRITICAL: Report call to CallKit and wait for completion
+        print("📞 Reporting call to CallKit")
+        print("   👤 Caller: \(displayName)")
+        print("   📞 Number: \(phoneNumber)")
+        print("   🏥 Clinic: \(clinicSlug ?? "nil")")
+        print("   📋 Script ID: \(scriptId ?? 0)")
+
+        // CRITICAL: Report call to CallKit immediately and synchronously
         // This ensures iOS doesn't terminate the app for unhandled VoIP pushes
-        if Thread.isMainThread {
+        print("✅ Calling CallKit synchronously")
         CallKitManager.shared.startIncomingCall(
             phoneNumber: phoneNumber,
             displayName: displayName,
@@ -743,57 +796,25 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
             roomId: roomId,
             callHistoryId: callHistoryId,
             conferenceUrl: conferenceUrl,
-                roomName: roomName,
+            roomName: roomName,
             scriptId: scriptId,
-                clinicSlug: clinicSlug,
-                scriptUUID: scriptUUID,
-                clinicName: clinicName
+            clinicSlug: clinicSlug,
+            scriptUUID: scriptUUID,
+            clinicName: clinicName
         ) { error in
-                // Track call delivery success/failure
-                if let error = error {
-                    print("❌ [\(currentPushId)] CallKit error: \(error)")
-                    self.trackCallDelivery(callId: currentPushId, successful: false)
-                } else {
-                    print("✅ [\(currentPushId)] CallKit reported successfully")
-                    self.trackCallDelivery(callId: currentPushId, successful: true)
-                }
-
-                // Call VoIP completion handler after CallKit is notified
-                // CRITICAL: Must call completion even on error to prevent crash
-                if let voipCompletion = voipCompletion {
-                    voipCompletion()
-                }
-            }
+            // Track call delivery success/failure
+            if let error = error {
+                print("❌ CallKit error: \(error)")
+                self.trackCallDelivery(callId: "call_\(Date().timeIntervalSince1970)", successful: false)
             } else {
-            DispatchQueue.main.sync {
-                CallKitManager.shared.startIncomingCall(
-                    phoneNumber: phoneNumber,
-                    displayName: displayName,
-                    callType: callType,
-                    roomId: roomId,
-                    callHistoryId: callHistoryId,
-                    conferenceUrl: conferenceUrl,
-                    roomName: roomName,
-                    scriptId: scriptId,
-                    clinicSlug: clinicSlug,
-                    scriptUUID: scriptUUID,
-                    clinicName: clinicName
-                ) { error in
-                    // Track call delivery success/failure
-                    if let error = error {
-                        print("❌ [\(currentPushId)] CallKit error (sync): \(error)")
-                        self.trackCallDelivery(callId: currentPushId, successful: false)
-                    } else {
-                        print("✅ [\(currentPushId)] CallKit reported successfully (sync)")
-                        self.trackCallDelivery(callId: currentPushId, successful: true)
-                    }
+                print("✅ CallKit reported successfully")
+                self.trackCallDelivery(callId: "call_\(Date().timeIntervalSince1970)", successful: true)
+            }
 
-                    // Call VoIP completion handler after CallKit is notified
-                    // CRITICAL: Must call completion even on error to prevent crash
-                    if let voipCompletion = voipCompletion {
-                        voipCompletion()
-                    }
-                }
+            // Call VoIP completion handler after CallKit is notified
+            // CRITICAL: Must call completion even on error to prevent crash
+            if let voipCompletion = voipCompletion {
+                voipCompletion()
             }
         }
     }
@@ -802,11 +823,95 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
     
     /// Register VoIP token with your server
     private func registerVoIPTokenWithServer(token: String) {
-    
+        print("🌐 Registering VoIP token with server...")
+        print("   🔑 Token: \(token)")
+        // TODO: Implement server registration
+        print("⚠️ Server registration not implemented yet")
     }
-    
+
     /// Unregister VoIP token from your server
     private func unregisterVoIPTokenWithServer() {
-      
+        print("🌐 Unregistering VoIP token from server...")
+        // TODO: Implement server unregistration
+        print("⚠️ Server unregistration not implemented yet")
+    }
+
+    /// Verify VoIP token status and registration
+    func verifyVoIPTokenStatus() {
+        print("🔍 Verifying VoIP token status...")
+
+        // Check if we have a stored token
+        if let storedToken: String = keychain.retrieve(key: "voip_push_token", type: String.self) {
+            print("   ✅ Stored VoIP token found: \(storedToken)")
+        } else {
+            print("   ⚠️ No stored VoIP token found")
+        }
+
+        // Check current registry token
+        if let currentToken = voipRegistry.pushToken(for: .voIP) {
+            let tokenString = currentToken.map { String(format: "%02.2hhx", $0) }.joined()
+            print("   📱 Current registry token: \(tokenString)")
+        } else {
+            print("   ❌ No current registry token")
+        }
+
+        // Check if delegate is set
+        print("   👂 Delegate is set: \(voipRegistry.delegate != nil)")
+        print("   🎯 Desired push types: \(String(describing: voipRegistry.desiredPushTypes))")
+    }
+
+    /// Force token renewal for debugging
+    func forceTokenRenewal() {
+        print("🔄 Forcing VoIP token renewal...")
+        // This will trigger didUpdate pushCredentials delegate method
+        voipRegistry.desiredPushTypes = [.voIP]
+    }
+
+    // MARK: - Public Methods for Debugging
+
+    /// Public method to verify VoIP setup (can be called for debugging)
+    public func debugVoIPStatus() {
+        print("🐛 === VoIP DEBUG STATUS ===")
+        verifyVoIPTokenStatus()
+
+        print("   📊 Pending calls count: \(pendingCalls.count)")
+        print("   🔄 Is in call: \(isInCall)")
+        print("   🔔 Is call ringing: \(isCallRinging)")
+        print("   📱 App state: \(UIApplication.shared.applicationState.rawValue)")
+        print("🐛 === END DEBUG STATUS ===")
+    }
+
+    /// Public method to force token renewal (can be called for debugging)
+    public func debugForceTokenRenewal() {
+        forceTokenRenewal()
+    }
+
+    // MARK: - AppDelegate Integration Methods
+
+    /// Handle token update from AppDelegate
+    func handleTokenUpdate(token: String) {
+        print("🔄 VoIPPushHandler: Handling token update from AppDelegate")
+        do {
+            try keychain.save(key: "voip_push_token", value: token)
+            print("✅ VoIP token saved to keychain from AppDelegate")
+            registerVoIPTokenWithServer(token: token)
+            NotificationCenter.default.post(name: .voipTokenUpdated, object: token)
+        } catch {
+            print("❌ VoIPPushHandler: Failed to save VoIP token from AppDelegate: \(error)")
+        }
+    }
+
+    /// Handle token invalidation from AppDelegate
+    func handleTokenInvalidation() {
+        print("⚠️ VoIPPushHandler: Handling token invalidation from AppDelegate")
+        keychain.delete(key: "voip_push_token")
+        unregisterVoIPTokenWithServer()
+    }
+
+    /// Handle incoming push from AppDelegate
+    @MainActor
+    func handleIncomingPush(payload: PKPushPayload, completion: @escaping () -> Void) {
+        print("📨 VoIPPushHandler: Handling incoming push from AppDelegate")
+        handleVoIPPush(payload, voipCompletion: completion)
     }
 }

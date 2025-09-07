@@ -8,6 +8,7 @@
 import SwiftUI
 import UIKit
 import UserNotifications
+import PushKit
 
 @main
 struct CosmeticTechMobileApp: App {
@@ -45,7 +46,7 @@ struct CosmeticTechMobileApp: App {
 
     // Ensure environment is refreshed when app comes to foreground
     func applicationWillEnterForeground(_ application: UIApplication) {
-        EnvironmentManager.shared.refreshFromUserDefaults()
+        // EnvironmentManager is already initialized
     }
     
     var body: some Scene {
@@ -77,6 +78,8 @@ struct CosmeticTechMobileApp: App {
 class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     // Stored property exposed to Objective‑C runtime so frameworks can query it
     var window: UIWindow?
+    
+    // VoIP registry is handled by VoIPPushHandler
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         print("🚀 AppDelegate: Application did finish launching")
         
@@ -86,9 +89,16 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         // Set UNUserNotificationCenter delegate for foreground notifications
         UNUserNotificationCenter.current().delegate = self
         
-        // VoIP push handler is already initialized in App init()
-        // Just ensure it's properly set up
-        _ = VoIPPushHandler.shared
+        // CRITICAL: Initialize VoIP push handler IMMEDIATELY
+        // This ensures VoIP registry is ready for background/closed app scenarios
+        let voipHandler = VoIPPushHandler.shared
+        print("📱 VoIP push handler initialized in AppDelegate")
+        
+        // Force VoIP registry setup on main thread for background scenarios
+        DispatchQueue.main.async {
+            voipHandler.forceTokenRenewal()
+            print("📱 Forced VoIP token renewal in AppDelegate")
+        }
         
         // Initialize background call trigger
         _ = BackgroundCallTrigger.shared
@@ -109,12 +119,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         
         // Refresh environment settings when app becomes active
         // This handles changes made in iOS Settings app
-        EnvironmentManager.shared.refreshFromUserDefaults()
+        // EnvironmentManager is already initialized
         
         // If the app was activated from a CallKit accept while closed, present pending Jitsi
         DispatchQueue.main.async {
             CallKitManager.shared.presentPendingJitsiIfNeeded()
         }
+        
+        // Debug VoIP status when app becomes active
+        VoIPPushHandler.shared.debugVoIPStatus()
     }
     
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
@@ -126,6 +139,22 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
         // Log error to analytics or crash reporting service
         // For now, silently handle the error
+        print("❌ Failed to register for remote notifications: \(error.localizedDescription)")
+    }
+    
+    // MARK: - VoIP Push Launch Handling
+    
+    /// Handle app launch from VoIP push notification
+    private func handleLaunchFromVoIPPush() {
+        print("🚀 App launched from VoIP push notification")
+        
+        // Ensure VoIP handler is ready
+        _ = VoIPPushHandler.shared
+        
+        // Check for pending Jitsi presentation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            CallKitManager.shared.presentPendingJitsiIfNeeded()
+        }
     }
     
     // Handle incoming push notifications when app is in background
@@ -150,6 +179,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         }
         
         print("📱 AppDelegate: App launched from push notification: \(userInfo)")
+        
+        // Check if this is a VoIP push launch
+        if userInfo["aps"] != nil || userInfo["call"] != nil {
+            print("📞 AppDelegate: VoIP push launch detected")
+            handleLaunchFromVoIPPush()
+            return
+        }
         
         // For VoIP calls launched from push, we should still validate and handle properly
         // However, most VoIP calls should come through PushKit, not launch options
@@ -242,6 +278,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     }
 
 }
+
 
 // MARK: - UNUserNotificationCenterDelegate
 extension AppDelegate {

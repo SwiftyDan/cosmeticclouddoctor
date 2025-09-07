@@ -122,6 +122,6 @@ class AuthManager: ObservableObject {
             return "No user data"
         }
         
-        return "User: \(user.name), Email: \(user.email), ID: \(user.userId ?? 0), Logged in: \(isLoggedIn)"
+        return "User: \(user.name), Email: \(user.email), ID: \(user.userId), Logged in: \(isLoggedIn)"
     }
 } 

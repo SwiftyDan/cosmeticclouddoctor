@@ -53,16 +53,28 @@ class CallKitManager: NSObject, ObservableObject {
     // MARK: - Setup
     
     private func setupCallKit() {
+        print("🔧 CallKitManager: Setting up CallKit...")
         let configuration = CXProviderConfiguration(localizedName: "CosmeticTech")
         configuration.supportsVideo = true
         configuration.maximumCallGroups = 1
         configuration.maximumCallsPerCallGroup = 1
-        configuration.supportedHandleTypes = [.generic]
+        configuration.supportedHandleTypes = [.phoneNumber]
         
         callProvider = CXProvider(configuration: configuration)
         callProvider?.setDelegate(self, queue: nil)
         
         callController = CXCallController()
+        
+        print("✅ CallKitManager: CallKit setup completed")
+        print("   📞 Provider: \(callProvider != nil ? "✅" : "❌")")
+        print("   🎮 Controller: \(callController != nil ? "✅" : "❌")")
+        
+        // Verify provider is properly configured
+        if let provider = callProvider {
+            print("   🔍 Provider configuration verified")
+        } else {
+            print("   ❌ CRITICAL: CallKit provider is nil!")
+        }
     }
     
     // MARK: - Public Methods
@@ -83,6 +95,14 @@ class CallKitManager: NSObject, ObservableObject {
         completion: ((Error?) -> Void)? = nil
     ) {
         print("📞 CallKitManager: Starting incoming call from \(displayName) (\(phoneNumber))")
+        print("📞 CallKitManager: Provider exists: \(callProvider != nil ? "✅" : "❌")")
+        print("📞 CallKitManager: Controller exists: \(callController != nil ? "✅" : "❌")")
+        
+        guard let provider = callProvider else {
+            print("❌ CallKitManager: No provider available, cannot start call")
+            completion?(NSError(domain: "CallKitManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "CallKit provider not available"]))
+            return
+        }
         
         let callUUID = UUID()
         currentCallUUID = callUUID
@@ -104,24 +124,33 @@ class CallKitManager: NSObject, ObservableObject {
         currentCall = callInfo
         
         let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .generic, value: phoneNumber)
+        update.remoteHandle = CXHandle(type: .phoneNumber, value: phoneNumber)
         update.localizedCallerName = displayName
         update.hasVideo = (callType == "video")
         
-        callProvider?.reportNewIncomingCall(with: callUUID, update: update) { error in
-            DispatchQueue.main.async {
-                if let error = error {
-                    print("❌ CallKitManager: Failed to report incoming call: \(error)")
-                    self.currentCallUUID = nil
-                    self.currentCall = nil
-                    self.currentCallState = .idle
-                } else {
-                    print("✅ CallKitManager: Incoming call reported successfully")
-                    self.isInCall = true
-                    self.currentCallState = .incoming
-                }
-                completion?(error)
+        print("📞 CallKitManager: About to report call to CallKit provider")
+        print("   📞 Call UUID: \(callUUID)")
+        print("   📞 Provider exists: \(provider != nil)")
+        
+        provider.reportNewIncomingCall(with: callUUID, update: update) { error in
+            print("📞 CallKitManager: CallKit reportNewIncomingCall completion called")
+            if let error = error {
+                print("❌ CallKitManager: Failed to report incoming call: \(error)")
+                print("❌ CallKitManager: Error details: \(error.localizedDescription)")
+                self.currentCallUUID = nil
+                self.currentCall = nil
+                self.isInCall = false
+                self.currentCallState = .idle
+            } else {
+                print("✅ CallKitManager: Incoming call reported successfully")
+                print("✅ CallKitManager: Call UUID: \(callUUID)")
+                print("✅ CallKitManager: Caller: \(displayName) (\(phoneNumber))")
+                print("✅ CallKitManager: Has video: \(update.hasVideo)")
+                self.isInCall = true
+                self.currentCallState = .incoming
             }
+            print("📞 CallKitManager: Calling completion handler")
+            completion?(error)
         }
     }
     
