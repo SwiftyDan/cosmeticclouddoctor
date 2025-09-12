@@ -65,7 +65,19 @@ struct ContentView: View {
                     onEndCall: {
                         // End the call and dismiss the view
                         print("🎥 Call ended from GlobalJitsiManager, dismissing view")
-                        globalJitsiManager.endCall()
+                        print("🎥 Current app state: \(UIApplication.shared.applicationState.rawValue)")
+                        print("🎥 GlobalJitsiManager isPresentingJitsi: \(globalJitsiManager.isPresentingJitsi)")
+                        
+                        // Set isPresentingJitsi to false immediately to ensure SwiftUI dismisses the fullScreenCover
+                        globalJitsiManager.isPresentingJitsi = false
+                        
+                        // Ensure we're on the main thread for UI updates
+                        DispatchQueue.main.async {
+                            globalJitsiManager.endCall()
+                            
+                            // Notify HomeViewModel to handle consultation ending
+                            NotificationCenter.default.post(name: .jitsiConferenceTerminated, object: nil)
+                        }
                     }
                 )
             }

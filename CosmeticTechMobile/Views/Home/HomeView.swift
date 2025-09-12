@@ -52,31 +52,6 @@ struct HomeView: View {
                 await viewModel.refreshQueueFromAPI()
             }
         }
-        .fullScreenCover(isPresented: $viewModel.isPresentingJitsi) {
-            if let params = viewModel.jitsiParameters {
-                JitsiMeetConferenceView(
-                    roomName: params.roomName,
-                    displayName: params.displayName,
-                    email: params.email,
-                    conferenceUrl: params.conferenceUrl,
-                    roomId: params.roomId,
-                    clinicSlug: params.clinicSlug,
-                    scriptId: params.scriptId,
-                    scriptUUID: params.scriptUUID,
-                    clinicName: params.clinicName,
-                    onEndCall: {
-                        // Handle consultation ending and automatically remove queue item
-                        viewModel.handleConsultationEnded()
-                        // Dismiss the Jitsi view
-                        viewModel.isPresentingJitsi = false
-                    }
-                )
-                .onDisappear {
-                    // Clean up consultation state if view is dismissed without ending call
-                    viewModel.cleanupConsultation()
-                }
-            }
-        }
     }
 }
 
@@ -148,7 +123,6 @@ struct QueueListSectionView: View {
                             item: item, 
                             position: index + 1, 
                             onCallBack: {
-                                // Start consultation using the new method
                                 viewModel.startQueueConsultation(for: item, displayName: authManager.currentUser?.name, email: authManager.currentUser?.email)
                             },
                             onDelete: {
@@ -600,3 +574,4 @@ struct ActivityRowView: View {
     HomeView(selectedTab: .constant(0))
         .environmentObject(AuthManager())
 } 
+

@@ -384,13 +384,13 @@ class VoIPPushHandler: NSObject {
         self.isCallRinging = isRinging
     }
     
-    /// Show push notification when Jitsi meeting is active
-    private func showPushNotificationForJitsiCall(callerName: String, callerId: String, scriptId: Int?, clinicSlug: String?) {
+    /// Show push notification when Jitsi meeting is active and automatically reject the call
+    private func showPushNotificationForJitsiCall(callerName: String, callerId: String, scriptId: Int?, clinicSlug: String?, scriptUUID: String?) {
         print("📱 VoIPPushHandler: Showing push notification for Jitsi call from \(callerName)")
         
         let content = UNMutableNotificationContent()
         content.title = "Incoming Call"
-        content.body = "\(callerName) is calling you"
+        content.body = "\(callerName) is calling you (automatically rejected - in meeting)"
         content.sound = UNNotificationSound(named: UNNotificationSoundName("ringtone.caf"))
         content.badge = 1
         content.categoryIdentifier = "INCOMING_CALL"
@@ -424,6 +424,79 @@ class VoIPPushHandler: NSObject {
                 print("✅ Push notification shown for Jitsi call from \(callerName)")
             }
         }
+        
+        // Automatically reject the call via API
+        Task {
+            await self.rejectCallViaAPI(scriptId: scriptId, clinicSlug: clinicSlug, scriptUUID: scriptUUID, callerName: callerName)
+        }
+    }
+    
+    /// Automatically reject call via API when in Jitsi meeting
+    private func rejectCallViaAPI(scriptId: Int?, clinicSlug: String?, scriptUUID: String?, callerName: String) async {
+        guard let scriptId = scriptId, let clinicSlug = clinicSlug else {
+            print("⚠️ VoIPPushHandler: Cannot reject call - missing scriptId or clinicSlug")
+            return
+        }
+        
+        do {
+            let callActionService = CallActionAPIService()
+            let _ = try await callActionService.reportCallAction(
+                scriptId: scriptId,
+                clinicSlug: clinicSlug,
+                scriptUUID: scriptUUID, // Now using the actual scriptUUID from VoIP push
+                action: .rejected
+            )
+            print("✅ VoIPPushHandler: Successfully rejected call from \(callerName) via API")
+        } catch {
+            print("❌ VoIPPushHandler: Failed to reject call from \(callerName) via API: \(error)")
+        }
+    }
+    
+    /// Handles queue removal events when app is in background/locked state
+    /// This method is called when a queue item is removed and we need to terminate any matching VoIP calls
+    func handleQueueRemoval(scriptId: Int?, scriptUUID: String?, patientName: String?) {
+        print("🗑️ VoIPPushHandler: Handling queue removal in background state")
+        print("   - Script ID: \(scriptId?.description ?? "nil")")
+        print("   - Script UUID: \(scriptUUID ?? "nil")")
+        print("   - Patient Name: \(patientName ?? "nil")")
+        
+        // Show the queue removal notification
+        NotificationService.shared.scheduleQueueRemovedNotification(
+            patientName: patientName,
+            id: scriptUUID ?? "\(scriptId ?? 0)"
+        )
+        
+        // Check if there's an active VoIP call that should be terminated
+        guard let scriptId = scriptId else {
+            print("📞 No script_id provided for VoIP call termination check")
+            return
+        }
+        
+        let callKitManager = CallKitManager.shared
+        
+        // Check if there's an active VoIP call
+        guard callKitManager.currentCallState != .idle else {
+            print("📞 No active VoIP call to terminate")
+            return
+        }
+        
+        // Check if the current call's script_id matches the removal script_id
+        guard let currentCall = callKitManager.currentCall,
+              let currentScriptId = currentCall.scriptId,
+              currentScriptId == scriptId else {
+            print("📞 Active VoIP call script_id (\(callKitManager.currentCall?.scriptId?.description ?? "nil")) doesn't match removal script_id (\(scriptId))")
+            return
+        }
+        
+        print("📞 Terminating VoIP call due to queue removal - script_id match: \(scriptId)")
+        print("   - Caller: \(currentCall.displayName)")
+        print("   - Script ID: \(currentScriptId)")
+        print("   - Call State: \(callKitManager.currentCallState)")
+        
+        // Terminate the VoIP call
+        callKitManager.endCall()
+        
+        print("✅ VoIP call terminated successfully due to queue removal")
     }
     
     // MARK: - VoIP Call State Handling
@@ -750,7 +823,8 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
                 callerName: displayNameFinal,
                 callerId: phoneNumberFinal,
                 scriptId: scriptId,
-                clinicSlug: clinicSlug
+                clinicSlug: clinicSlug,
+                scriptUUID: scriptUUID
             )
             voipCompletion?()
             return

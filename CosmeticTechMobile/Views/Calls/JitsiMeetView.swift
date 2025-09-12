@@ -327,29 +327,26 @@ struct JitsiMeetConferenceView: View {
         print("🎥 Force dismissing Jitsi meeting view")
         print("🎥 Current thread: \(Thread.isMainThread ? "Main" : "Background")")
         
-        // Mark that user intentionally ended the call
-        // Note: We can't access coordinator directly here, so we'll rely on the delegate methods
-        
-        // Always call onEndCall when native close button is pressed, regardless of conference state
-        if let onEndCall = onEndCall {
-            print("🎥 Native close button pressed - calling onEndCall callback")
-            DispatchQueue.main.async {
-                onEndCall()
-            }
-        } else {
-            print("🎥 Native close button pressed - no onEndCall callback available")
-        }
-        
-        // Try multiple dismissal methods to ensure the view is dismissed
-        
-        // Method 1: Try SwiftUI presentationMode dismiss (for fullScreenCover presentations)
+        // Ensure all operations happen on the main thread
         DispatchQueue.main.async {
+            // Mark that user intentionally ended the call
+            self.isUserEndingCall = true
+            
+            // Always call onEndCall when native close button is pressed, regardless of conference state
+            if let onEndCall = self.onEndCall {
+                print("🎥 Native close button pressed - calling onEndCall callback")
+                onEndCall()
+            } else {
+                print("🎥 Native close button pressed - no onEndCall callback available")
+            }
+            
+            // Try multiple dismissal methods to ensure the view is dismissed
+            
+            // Method 1: Try SwiftUI presentationMode dismiss (for fullScreenCover presentations)
             print("🎥 Attempting SwiftUI dismiss")
             self.presentationMode.wrappedValue.dismiss()
-        }
-        
-        // Method 2: Try UIKit modal dismiss (for UIKit modal presentations)
-        DispatchQueue.main.async {
+            
+            // Method 2: Try UIKit modal dismiss (for UIKit modal presentations)
             if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
                let window = windowScene.windows.first,
                let rootViewController = window.rootViewController {
@@ -384,10 +381,8 @@ struct JitsiMeetConferenceView: View {
             } else {
                 print("🎥 Could not find window or root view controller")
             }
-        }
-        
-        // Method 3: Post notification to trigger dismissal from other parts of the app
-        DispatchQueue.main.async {
+            
+            // Method 3: Post notification to trigger dismissal from other parts of the app
             print("🎥 Posting notification to trigger dismissal")
             NotificationCenter.default.post(name: NSNotification.Name("DismissJitsiMeeting"), object: nil)
         }
@@ -773,8 +768,6 @@ struct DirectJitsiMeetView: UIViewRepresentable {
         if let jitsiView = uiView as? JitsiMeetView {
             jitsiView.leave()
         }
-        // Deactivate call audio session when view is dismantled
-        AudioService.shared.deactivateCallAudioSession()
         
         // Only trigger queue removal if user intentionally ended the call
         // This prevents queue removal when switching tabs or going to background
@@ -845,7 +838,6 @@ struct DirectJitsiMeetView: UIViewRepresentable {
             print("🎥 Conference left")
             // Only trigger dismissal if we had actually joined the conference
             if hasJoinedConference && !isConferenceEnding {
-                isConferenceEnding = true
                 handleConferenceEnd()
             }
         }
@@ -854,7 +846,6 @@ struct DirectJitsiMeetView: UIViewRepresentable {
             print("🎥 Conference ended")
             // Only trigger dismissal if we had actually joined the conference
             if hasJoinedConference && !isConferenceEnding {
-                isConferenceEnding = true
                 handleConferenceEnd()
             }
         }
@@ -877,14 +868,10 @@ struct DirectJitsiMeetView: UIViewRepresentable {
             
             // Only trigger dismissal if we had actually joined the conference
             if hasJoinedConference && !isConferenceEnding {
-                isConferenceEnding = true
                 handleConferenceEnd()
             }
             
-            // Trigger queue list API refresh when meeting is about to end
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: .jitsiConferenceTerminated, object: nil)
-            }
+            // Note: Don't post jitsiConferenceTerminated here as it will be posted in conferenceTerminated
         }
         
         // CRITICAL: This is the main delegate method for native close button
@@ -900,7 +887,6 @@ struct DirectJitsiMeetView: UIViewRepresentable {
             
             // Only trigger dismissal if we had actually joined the conference and it's not already ending
             if hasJoinedConference && !isConferenceEnding {
-                isConferenceEnding = true
                 handleConferenceEnd()
             }
             
@@ -913,42 +899,41 @@ struct DirectJitsiMeetView: UIViewRepresentable {
         // MARK: - Helper Methods
         private func handleConferenceEnd() {
             print("🎥 Handling conference end - hasJoinedConference: \(hasJoinedConference), isConferenceEnding: \(isConferenceEnding)")
+            print("🎥 Current app state: \(UIApplication.shared.applicationState.rawValue)")
+            print("🎥 Current thread: \(Thread.isMainThread ? "Main" : "Background")")
             
-            // Remove queue item when Jitsi meeting ends (native end call button)
-            DispatchQueue.main.async {
-                self.removeQueueItemFromJitsi()
+            // Only proceed if we actually joined the conference
+            guard hasJoinedConference else {
+                print("🎥 Conference never joined, ignoring end call")
+                return
             }
             
-            // Ensure CallKit session is properly ended when Jitsi meeting ends
+            // Set the flag to prevent duplicate calls
+            isConferenceEnding = true
+            print("🎥 Set isConferenceEnding to true")
+            
+            // Ensure all operations happen on the main thread
             DispatchQueue.main.async {
+                // Remove queue item when Jitsi meeting ends (native end call button)
+                print("🎥 Removing queue item from Jitsi")
+                self.removeQueueItemFromJitsi()
+                
                 // Transition back to normal audio session
+                print("🎥 Transitioning audio session")
                 AudioService.shared.transitionFromJitsiAudioSession()
                 
-                // Use the proper method to end call from Jitsi
-                CallKitManager.shared.endCallFromJitsi()
-            }
-            
-            // Use direct callback for native close button
-            if let onNativeClosePressed = parent.onNativeClosePressed {
-                DispatchQueue.main.async {
+                // Use direct callback for native close button - this will trigger the dismissal flow
+                if let onNativeClosePressed = self.parent.onNativeClosePressed {
+                    print("🎥 Using direct onNativeClosePressed callback")
                     onNativeClosePressed()
-                }
-            } else {
-                // Fallback: Post notification for native close button on main queue
-                DispatchQueue.main.async {
+                } else {
+                    // Fallback: Post notification for native close button
+                    print("🎥 Using fallback notification for native close button")
                     NotificationCenter.default.post(name: NSNotification.Name("JitsiNativeClosePressed"), object: nil)
                 }
+                
+                print("🎥 handleConferenceEnd completed")
             }
-            
-            // Always trigger onEndCall to ensure proper dismissal
-            if let onEndCall = parent.onEndCall {
-                DispatchQueue.main.async {
-                    onEndCall()
-                }
-            }
-            
-            // Also call onConferenceTerminated for cleanup
-            parent.onConferenceTerminated?()
         }
         
         /// Remove queue item when Jitsi meeting ends (native end call button)

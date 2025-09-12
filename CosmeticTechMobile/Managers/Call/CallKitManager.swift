@@ -276,6 +276,13 @@ class CallKitManager: NSObject, ObservableObject {
         }
         
         print("📞 CallKitManager: Ending CallKit session for Jitsi transition")
+        print("📞 CallKitManager: Current app state: \(UIApplication.shared.applicationState.rawValue)")
+        
+        // Check if we're in a valid state for CallKit operations
+        guard UIApplication.shared.applicationState != .background else {
+            print("⚠️ CallKitManager: App is in background, deferring CallKit session end")
+            return
+        }
         
         let endCallAction = CXEndCallAction(call: callUUID)
         let transaction = CXTransaction(action: endCallAction)
@@ -284,12 +291,20 @@ class CallKitManager: NSObject, ObservableObject {
         isEndingForJitsiTransition = true
 
         callController?.request(transaction) { error in
-            if let error = error {
-                print("❌ CallKitManager: Failed to end CallKit session: \(error)")
-                self.isEndingForJitsiTransition = false
-            } else {
-                print("✅ CallKitManager: CallKit session ended successfully")
-                // Delegate callback will handle state updates; avoid double-posting or clearing here
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("❌ CallKitManager: Failed to end CallKit session: \(error)")
+                    print("❌ CallKitManager: Error details: \(error.localizedDescription)")
+                    self.isEndingForJitsiTransition = false
+                    
+                    // If CallKit fails, we still need to clean up our state
+                    self.currentCallUUID = nil
+                    self.isInCall = false
+                    self.currentCallState = .ended
+                } else {
+                    print("✅ CallKitManager: CallKit session ended successfully")
+                    // Delegate callback will handle state updates; avoid double-posting or clearing here
+                }
             }
         }
     }
@@ -450,4 +465,6 @@ extension CallKitManager: CXProviderDelegate {
         VoIPPushHandler.shared.setCallState(isInCall: false, isRinging: false)
     }
 }
+
+
 

@@ -8,6 +8,7 @@
 import Foundation
 import AVFoundation
 import AudioToolbox
+import UIKit
 
 @MainActor
 class AudioService: NSObject, ObservableObject {
@@ -189,8 +190,20 @@ class AudioService: NSObject, ObservableObject {
     // MARK: - Audio Session Management
     
     func activateCallAudioSession() {
+        print("🎤 AudioService: Activating call audio session")
+        print("🎤 AudioService: Current app state: \(UIApplication.shared.applicationState.rawValue)")
+        
         do {
             let audioSession = AVAudioSession.sharedInstance()
+            
+            // Check if we're in a valid state for audio session changes
+            guard UIApplication.shared.applicationState != .background else {
+                print("⚠️ AudioService: App is in background, deferring audio session activation")
+                return
+            }
+            
+            // First deactivate any existing session to avoid conflicts
+            try? audioSession.setActive(false, options: [.notifyOthersOnDeactivation])
             
             // Configure audio session for voice calls with optimal settings
             try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker])
@@ -199,28 +212,58 @@ class AudioService: NSObject, ObservableObject {
             try audioSession.setPreferredSampleRate(44100.0)
             try audioSession.setPreferredIOBufferDuration(0.005) // 5ms for low latency
             
-            // Activate the audio session
-            try audioSession.setActive(true)
+            // Activate the audio session with retry logic
+            var retryCount = 0
+            var lastError: Error?
             
-            print("🎤 Call audio session activated successfully")
-            print("   - Category: \(audioSession.category)")
-            print("   - Mode: \(audioSession.mode)")
-            print("   - Sample Rate: \(audioSession.sampleRate)")
-            print("   - I/O Buffer Duration: \(audioSession.ioBufferDuration)")
+            while retryCount < 3 {
+                do {
+                    try audioSession.setActive(true)
+                    print("🎤 Call audio session activated successfully")
+                    print("   - Category: \(audioSession.category)")
+                    print("   - Mode: \(audioSession.mode)")
+                    print("   - Sample Rate: \(audioSession.sampleRate)")
+                    print("   - I/O Buffer Duration: \(audioSession.ioBufferDuration)")
+                    return
+                } catch {
+                    lastError = error
+                    retryCount += 1
+                    print("⚠️ AudioService: Audio session activation attempt \(retryCount) failed: \(error)")
+                    
+                    if retryCount < 3 {
+                        // Wait a bit before retrying
+                        Thread.sleep(forTimeInterval: 0.1)
+                    }
+                }
+            }
+            
+            // If all retries failed, log the error but don't crash
+            print("❌ AudioService: Failed to activate call audio session after 3 attempts: \(lastError?.localizedDescription ?? "Unknown error")")
             
         } catch {
-            print("❌ Failed to activate call audio session: \(error)")
+            print("❌ AudioService: Failed to configure call audio session: \(error)")
         }
     }
     
     func deactivateCallAudioSession() {
+        print("🎤 AudioService: Deactivating call audio session")
+        print("🎤 AudioService: Current app state: \(UIApplication.shared.applicationState.rawValue)")
+        
         do {
             let audioSession = AVAudioSession.sharedInstance()
+            
+            // Check if we're in a valid state for audio session changes
+            guard UIApplication.shared.applicationState != .background else {
+                print("⚠️ AudioService: App is in background, deferring audio session deactivation")
+                return
+            }
+            
             // Be courteous to other audio and avoid deactivation errors
             try audioSession.setActive(false, options: [.notifyOthersOnDeactivation])
             print("🎤 Call audio session deactivated successfully")
         } catch {
-            print("❌ Failed to deactivate call audio session: \(error)")
+            print("❌ AudioService: Failed to deactivate call audio session: \(error)")
+            print("❌ AudioService: Error details: \(error.localizedDescription)")
         }
     }
     
@@ -257,22 +300,78 @@ class AudioService: NSObject, ObservableObject {
     
     /// Transition from Jitsi audio session back to normal audio session
     func transitionFromJitsiAudioSession() {
+        print("🎤 AudioService: Starting transition from Jitsi audio session")
+        print("🎤 AudioService: Current app state: \(UIApplication.shared.applicationState.rawValue)")
+        
+        // Check if we're in a valid state for audio session changes
+        guard UIApplication.shared.applicationState != .background else {
+            print("⚠️ AudioService: App is in background, deferring audio session transition")
+            return
+        }
+        
         do {
             let audioSession = AVAudioSession.sharedInstance()
             
-            // Deactivate the current session
-            try audioSession.setActive(false, options: [.notifyOthersOnDeactivation])
+            print("🎤 AudioService: Current audio session before transition:")
+            print("   - Category: \(audioSession.category)")
+            print("   - Mode: \(audioSession.mode)")
+            print("   - Is Active: \(audioSession.isOtherAudioPlaying)")
+            
+            // Deactivate the current session with retry logic
+            print("🎤 AudioService: Deactivating current audio session")
+            var deactivateRetryCount = 0
+            var deactivateSuccess = false
+            
+            while deactivateRetryCount < 3 && !deactivateSuccess {
+                do {
+                    try audioSession.setActive(false, options: [.notifyOthersOnDeactivation])
+                    deactivateSuccess = true
+                    print("🎤 AudioService: Audio session deactivated successfully")
+                } catch {
+                    deactivateRetryCount += 1
+                    print("⚠️ AudioService: Deactivation attempt \(deactivateRetryCount) failed: \(error)")
+                    if deactivateRetryCount < 3 {
+                        Thread.sleep(forTimeInterval: 0.1)
+                    }
+                }
+            }
             
             // Reset to default playback category
+            print("🎤 AudioService: Setting category to playback")
             try audioSession.setCategory(.playback, mode: .default, options: [.duckOthers])
             
-            // Activate the new session
-            try audioSession.setActive(true)
+            // Activate the new session with retry logic
+            print("🎤 AudioService: Activating new audio session")
+            var activateRetryCount = 0
+            var activateSuccess = false
             
-            print("🎤 Transitioned from Jitsi audio session successfully")
+            while activateRetryCount < 3 && !activateSuccess {
+                do {
+                    try audioSession.setActive(true)
+                    activateSuccess = true
+                    print("🎤 AudioService: New audio session activated successfully")
+                } catch {
+                    activateRetryCount += 1
+                    print("⚠️ AudioService: Activation attempt \(activateRetryCount) failed: \(error)")
+                    if activateRetryCount < 3 {
+                        Thread.sleep(forTimeInterval: 0.1)
+                    }
+                }
+            }
+            
+            if activateSuccess {
+                print("🎤 AudioService: Transitioned from Jitsi audio session successfully")
+                print("🎤 AudioService: New audio session state:")
+                print("   - Category: \(audioSession.category)")
+                print("   - Mode: \(audioSession.mode)")
+                print("   - Is Active: \(audioSession.isOtherAudioPlaying)")
+            } else {
+                print("❌ AudioService: Failed to activate new audio session after 3 attempts")
+            }
             
         } catch {
-            print("❌ Failed to transition from Jitsi audio session: \(error)")
+            print("❌ AudioService: Failed to transition from Jitsi audio session: \(error)")
+            print("❌ AudioService: Error details: \(error.localizedDescription)")
         }
     }
     

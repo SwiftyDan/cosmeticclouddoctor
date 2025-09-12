@@ -80,8 +80,6 @@ protocol HomeViewModelProtocol: ObservableObject {
     var callHistory: [CallHistoryItem] { get }
     var isLoadingCallHistory: Bool { get }
     var queueList: [QueueItem] { get }
-    var jitsiParameters: JitsiParameters? { get }
-    var isPresentingJitsi: Bool { get }
     func handleQuickAction(_ action: QuickAction)
     func refreshCallHistory() async
     func startVideoConsultation(conferenceURL: String, displayName: String?, email: String?)
@@ -100,13 +98,13 @@ class HomeViewModel: HomeViewModelProtocol {
     @Published var queueList: [QueueItem] = [] {
         didSet {
             // Update badge count whenever queue list changes
-            BadgeManager.shared.updateBadgeCount(to: queueList.count)
+            Task { @MainActor in
+                BadgeManager.shared.updateBadgeCount(to: queueList.count)
+            }
         }
     }
     @Published var isLoadingQueue: Bool = false
 
-    @Published var jitsiParameters: JitsiParameters?
-    @Published var isPresentingJitsi: Bool = false
     @Published var currentConsultationItem: QueueItem? = nil
     
     private let activityService: ActivityServiceProtocol
@@ -221,8 +219,11 @@ class HomeViewModel: HomeViewModelProtocol {
             conferenceUrl: conferenceURL,
             roomId: conferenceURL
         )
-        jitsiParameters = params
-        isPresentingJitsi = true
+        
+        // Use GlobalJitsiManager as the single source of truth for Jitsi presentation
+        GlobalJitsiManager.shared.presentJitsi(with: params)
+        
+        print("🎥 HomeViewModel: Video consultation started via GlobalJitsiManager")
     }
     
     /// Starts a consultation for a queue item
@@ -240,17 +241,22 @@ class HomeViewModel: HomeViewModelProtocol {
         // Use the same room setup logic as VoIP calls for consistency
         let roomName = resolveRoomNameForQueueItem(item)
         
-        jitsiParameters = JitsiParameters(
+        let jitsiParams = JitsiParameters(
             roomName: roomName,
             displayName: displayName,
             email: email,
             conferenceUrl: EnvironmentManager.shared.currentJitsiURL, // Same server as VoIP calls
             roomId: roomName,
             clinicSlug: item.clinicSlug,
-            scriptId: item.scriptId
+            scriptId: item.scriptId,
+            scriptUUID: item.scriptUUID,
+            clinicName: item.clinic
         )
         
-        isPresentingJitsi = true
+        // Use GlobalJitsiManager as the single source of truth for Jitsi presentation
+        GlobalJitsiManager.shared.presentJitsi(with: jitsiParams)
+        
+        print("🎥 HomeViewModel: Queue consultation started via GlobalJitsiManager")
     }
     
     /// Resolves room name using the same logic as VoIP calls
@@ -381,10 +387,13 @@ class HomeViewModel: HomeViewModelProtocol {
             guard let self else { return }
             if let jitsiParameters = notification.userInfo?["jitsiParameters"] as? JitsiParameters {
                 print("🎥 Received Jitsi presentation request from CallKit")
-                self.jitsiParameters = jitsiParameters
-                self.isPresentingJitsi = true
+                // Use GlobalJitsiManager as the single source of truth
+                GlobalJitsiManager.shared.presentJitsi(with: jitsiParameters)
             }
         }
+        
+        // No need for bidirectional sync since we only use GlobalJitsiManager for Jitsi presentation
+        // HomeViewModel only tracks consultation items, not Jitsi presentation state
     }
 
     func refreshQueueFromAPI() async {
@@ -618,6 +627,11 @@ class HomeViewModel: HomeViewModelProtocol {
         // Clear the current consultation item
         currentConsultationItem = nil
         
+        // Dismiss Jitsi meeting via GlobalJitsiManager
+        GlobalJitsiManager.shared.dismissJitsi()
+        
+        print("🎥 HomeViewModel: Consultation ended via GlobalJitsiManager")
+        
         // Automatically remove the item from the queue using the same API endpoint
         Task {
             await removeQueueItem(consultationItem)
@@ -630,6 +644,11 @@ class HomeViewModel: HomeViewModelProtocol {
         if currentConsultationItem != nil {
             print("🎥 Jitsi view dismissed, cleaning up consultation state")
             currentConsultationItem = nil
+            
+            // Dismiss Jitsi meeting via GlobalJitsiManager
+            GlobalJitsiManager.shared.dismissJitsi()
+            
+            print("🎥 HomeViewModel: Cleanup completed via GlobalJitsiManager")
         }
     }
     
@@ -651,7 +670,9 @@ class HomeViewModel: HomeViewModelProtocol {
         ) { [weak self] _ in
             print("📱 HomeViewModel: App became active, updating badge count to match queue")
             // Update badge to match current queue count
-            BadgeManager.shared.updateBadgeCount(to: self?.queueList.count ?? 0)
+            Task { @MainActor in
+                BadgeManager.shared.updateBadgeCount(to: self?.queueList.count ?? 0)
+            }
         }
         
         // Update badge when app enters background
@@ -662,7 +683,9 @@ class HomeViewModel: HomeViewModelProtocol {
         ) { [weak self] _ in
             print("📱 HomeViewModel: App entered background, ensuring badge reflects queue count")
             // Ensure badge reflects current queue count when going to background
-            BadgeManager.shared.updateBadgeCount(to: self?.queueList.count ?? 0)
+            Task { @MainActor in
+                BadgeManager.shared.updateBadgeCount(to: self?.queueList.count ?? 0)
+            }
         }
     }
 } 

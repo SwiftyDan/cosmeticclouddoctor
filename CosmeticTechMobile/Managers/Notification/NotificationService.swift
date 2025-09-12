@@ -69,7 +69,7 @@ final class NotificationService {
 
         let content = UNMutableNotificationContent()
         
-        let message = "Incoming Script Request Added to Queue"
+        let message = "Incoming Call Request Added to Queue"
         content.title = "Consultation queued"
         content.body = message
         content.sound = .default
@@ -99,12 +99,13 @@ final class NotificationService {
 
     // MARK: - Queue Notifications
     func scheduleQueueAddedNotification(patientName: String?, id: String) {
-        let message = "Incoming Script Request Added to Queue"
+        let message = "Incoming Call Request Added to Queue"
         scheduleQueueChange(id: "queue.add.\(id)", title: message, body: message)
     }
 
     func scheduleQueueRemovedNotification(patientName: String?, id: String) {
-        scheduleQueueChange(id: "queue.remove.\(id)", title: "Queue update", body: "A patient was removed from your queue: \(patientName ?? "Unknown")")
+        let message = "Incoming call was cancelled. They've been removed from your queue"
+        scheduleQueueChange(id: "queue.remove.\(id)", title: "Call Cancelled", body: message)
     }
 
     private func scheduleQueueChange(id: String, title: String, body: String) {

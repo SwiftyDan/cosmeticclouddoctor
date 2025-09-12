@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import Starscream
+import UIKit
 
 @MainActor
 final class WebSocketManager: ObservableObject, WebSocketDelegate {
@@ -320,15 +321,30 @@ final class WebSocketManager: ObservableObject, WebSocketDelegate {
             
             print("✅ Local queue updated - item removed successfully")
             
-            // CRITICAL: End any current call trigger if this removal matches the current call
-            endCurrentCallIfMatches(scriptUUID: scriptUUID, scriptId: scriptId)
+            // Show push notification for queue removal
+            NotificationService.shared.scheduleQueueRemovedNotification(
+                patientName: foundItem.patientName,
+                id: foundItem.id
+            )
+            
+            // Check if there's an active VoIP call with matching script_id and terminate it
+            handleQueueRemovalWithBackgroundSupport(scriptId: scriptId, scriptUUID: scriptUUID, patientName: foundItem.patientName)
             
             return
         }
         
         // If we get here, the item wasn't found in queue, but still check if we should end current call
         print("⚠️ Item not found in queue - checking if current call should be ended")
-        endCurrentCallIfMatches(scriptUUID: scriptUUID, scriptId: scriptId)
+        
+        // Show notification even if item wasn't found in local queue (in case it was already removed)
+        // This ensures the user gets notified about the cancellation regardless of local state
+        NotificationService.shared.scheduleQueueRemovedNotification(
+            patientName: nil,
+            id: scriptUUID ?? "\(scriptId ?? 0)"
+        )
+        
+        // Check if there's an active VoIP call with matching script_id and terminate it
+        handleQueueRemovalWithBackgroundSupport(scriptId: scriptId, scriptUUID: scriptUUID, patientName: nil)
     }
     
     private func handleAddEvent(eventData: [String: Any]) {
@@ -480,6 +496,63 @@ final class WebSocketManager: ObservableObject, WebSocketDelegate {
             callKitManager.endCall()
         } else {
             print("📞 No active call to end")
+        }
+    }
+    
+    /// Terminates VoIP call if it matches the script_id from the removal event
+    private func terminateVoIPCallIfMatching(scriptId: Int?) {
+        guard let scriptId = scriptId else {
+            print("📞 No script_id provided for VoIP call termination check")
+            return
+        }
+        
+        let callKitManager = CallKitManager.shared
+        
+        // Check if there's an active VoIP call
+        guard callKitManager.currentCallState != .idle else {
+            print("📞 No active VoIP call to terminate")
+            return
+        }
+        
+        // Check if the current call's script_id matches the removal script_id
+        guard let currentCall = callKitManager.currentCall,
+              let currentScriptId = currentCall.scriptId,
+              currentScriptId == scriptId else {
+            print("📞 Active VoIP call script_id (\(callKitManager.currentCall?.scriptId?.description ?? "nil")) doesn't match removal script_id (\(scriptId))")
+            return
+        }
+        
+        print("📞 Terminating VoIP call due to queue removal - script_id match: \(scriptId)")
+        print("   - Caller: \(currentCall.displayName)")
+        print("   - Script ID: \(currentScriptId)")
+        print("   - Call State: \(callKitManager.currentCallState)")
+        
+        // Terminate the VoIP call
+        callKitManager.endCall()
+        
+        print("✅ VoIP call terminated successfully due to queue removal")
+    }
+    
+    /// Handles queue removal with background state awareness
+    private func handleQueueRemovalWithBackgroundSupport(scriptId: Int?, scriptUUID: String?, patientName: String?) {
+        // Check if app is in background or inactive state
+        let appState = UIApplication.shared.applicationState
+        let isBackground = appState == .background || appState == .inactive
+        
+        print("🗑️ Queue removal handling - App state: \(appState.rawValue) (\(isBackground ? "background/inactive" : "active"))")
+        
+        if isBackground {
+            // Use VoIP push handler for background state
+            print("📱 App in background - using VoIP push handler for queue removal")
+            VoIPPushHandler.shared.handleQueueRemoval(
+                scriptId: scriptId,
+                scriptUUID: scriptUUID,
+                patientName: patientName
+            )
+        } else {
+            // Use normal WebSocket handling for foreground state
+            print("📱 App in foreground - using normal WebSocket handling")
+            terminateVoIPCallIfMatching(scriptId: scriptId)
         }
     }
     
