@@ -253,10 +253,37 @@ class HomeViewModel: HomeViewModelProtocol {
             clinicName: item.clinic
         )
         
+        // Report call action to API (same as VoIP call acceptance)
+        Task {
+            await reportCallActionForQueueItem(item)
+        }
+        
         // Use GlobalJitsiManager as the single source of truth for Jitsi presentation
         GlobalJitsiManager.shared.presentJitsi(with: jitsiParams)
         
         print("🎥 HomeViewModel: Queue consultation started via GlobalJitsiManager")
+    }
+    
+    /// Reports call action to API for queue item (same as VoIP call acceptance)
+    private func reportCallActionForQueueItem(_ item: QueueItem) async {
+        guard let scriptId = item.scriptId,
+              let clinicSlug = item.clinicSlug else {
+            print("⚠️ HomeViewModel: Cannot report call action - missing scriptId or clinicSlug")
+            return
+        }
+        
+        do {
+            let callActionService = CallActionAPIService()
+            let _ = try await callActionService.reportCallAction(
+                scriptId: scriptId,
+                clinicSlug: clinicSlug,
+                scriptUUID: item.scriptUUID,
+                action: .accepted
+            )
+            print("✅ HomeViewModel: Successfully reported ACCEPTED action for queue item: \(item.patientName)")
+        } catch {
+            print("❌ HomeViewModel: Failed to report ACCEPTED action for queue item: \(item.patientName) - \(error)")
+        }
     }
     
     /// Resolves room name using the same logic as VoIP calls
@@ -401,36 +428,16 @@ class HomeViewModel: HomeViewModelProtocol {
         do {
             let newItems = try await queueAPIService.fetchQueueEntries()
             
-            print("🔄 API returned \(newItems.count) items, applying additional deduplication...")
+            print("🔄 API returned \(newItems.count) items, completely overriding WebSocket/local data...")
             
             // Apply additional deduplication layer for safety
             let deduplicatedItems = deduplicateQueueItems(newItems)
             
-            // Preserve original creation timestamps for existing items
-            let updatedItems = deduplicatedItems.map { newItem in
-                // Check if this item already exists in current queue
-                if let existingItem = webSocketManager.queueItems.first(where: { $0.id == newItem.id }) {
-                    // Preserve the original creation timestamp
-                    return QueueItem(
-                        id: newItem.id,
-                        patientName: newItem.patientName,
-                        clinic: newItem.clinic,
-                        createdAt: existingItem.createdAt, // Keep original timestamp
-                        clinicSlug: newItem.clinicSlug,
-                        scriptId: newItem.scriptId,
-                        scriptUUID: newItem.scriptUUID,
-                        scriptNumber: newItem.scriptNumber,
-                        roomName: newItem.roomName
-                    )
-                } else {
-                    // New item, use the timestamp from API
-                    return newItem
-                }
-            }
+            // COMPLETELY OVERRIDE: Use API data as the single source of truth
+            // This ensures refresh always shows the latest server state, ignoring any local/WebSocket data
+            webSocketManager.queueItems = deduplicatedItems
             
-            // Update queue with preserved timestamps
-            webSocketManager.queueItems = updatedItems
-            print("🔄 Queue refreshed from API: \(updatedItems.count) items (timestamps preserved, duplicates removed)")
+            print("🔄 Queue completely refreshed from API: \(deduplicatedItems.count) items (WebSocket/local data overridden)")
         } catch {
             print("❌ Failed to refresh queue from API: \(error)")
         }

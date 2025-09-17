@@ -116,6 +116,17 @@ class GlobalJitsiManager: ObservableObject {
         }
     }
     
+    // MARK: - Clear State (for logout)
+    
+    /// Clears all Jitsi meeting state (used during logout)
+    func clearJitsiState() {
+        print("🗑️ GlobalJitsiManager: Clearing Jitsi state")
+        isPresentingJitsi = false
+        jitsiParameters = nil
+        isDismissing = false
+        print("✅ GlobalJitsiManager: Jitsi state cleared")
+    }
+    
     // MARK: - Private Methods
     
     private func setupNotificationObservers() {

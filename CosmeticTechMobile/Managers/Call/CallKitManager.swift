@@ -19,6 +19,10 @@ class CallKitManager: NSObject, ObservableObject {
     private var currentCallUUID: UUID?
     private var isEndingForJitsiTransition: Bool = false
     private var pendingJitsiParameters: JitsiParameters?
+    private var callTimeoutTimer: Timer?
+    
+    // MARK: - Configuration
+    private let callTimeoutDuration: TimeInterval = 30.0 // 30 seconds
     
     @Published var isInCall: Bool = false
     @Published var currentCall: CallInfo?
@@ -151,6 +155,9 @@ class CallKitManager: NSObject, ObservableObject {
                 
                 // Notify VoIPPushHandler that call is ringing
                 VoIPPushHandler.shared.setCallState(isInCall: true, isRinging: true)
+                
+                // Start 30-second timeout timer
+                self.startCallTimeoutTimer()
             }
             print("📞 CallKitManager: Calling completion handler")
             completion?(error)
@@ -165,6 +172,9 @@ class CallKitManager: NSObject, ObservableObject {
         }
         
         print("📞 CallKitManager: Ending call")
+        
+        // Cancel timeout timer
+        cancelCallTimeoutTimer()
         
         let endCallAction = CXEndCallAction(call: callUUID)
         let transaction = CXTransaction(action: endCallAction)
@@ -181,6 +191,49 @@ class CallKitManager: NSObject, ObservableObject {
                 self.currentCallState = .ended
             }
         }
+    }
+    
+    // MARK: - Call Timeout Management
+    
+    /// Start the 30-second timeout timer for incoming calls
+    private func startCallTimeoutTimer() {
+        // Cancel any existing timer
+        cancelCallTimeoutTimer()
+        
+        print("⏰ CallKitManager: Starting \(Int(callTimeoutDuration))-second call timeout timer")
+        
+        callTimeoutTimer = Timer.scheduledTimer(withTimeInterval: callTimeoutDuration, repeats: false) { [weak self] _ in
+            print("⏰ CallKitManager: Call timeout reached (\(Int(self?.callTimeoutDuration ?? 30)) seconds) - ending call")
+            self?.handleCallTimeout()
+        }
+    }
+    
+    /// Cancel the call timeout timer
+    private func cancelCallTimeoutTimer() {
+        callTimeoutTimer?.invalidate()
+        callTimeoutTimer = nil
+    }
+    
+    /// Handle call timeout - automatically end the call
+    private func handleCallTimeout() {
+        guard currentCallState == .incoming else {
+            print("⏰ CallKitManager: Call timeout but call is no longer incoming - ignoring")
+            return
+        }
+        
+        print("⏰ CallKitManager: Call timed out after \(Int(callTimeoutDuration)) seconds - ending call")
+        
+        // Report the call as rejected due to timeout
+        if let call = currentCall {
+            reportCallAction(.rejected)
+        }
+        
+        // End the call
+        endCall()
+        
+        // Notify VoIPPushHandler that call ended
+        VoIPPushHandler.shared.setCallState(isInCall: false, isRinging: false)
+        NotificationCenter.default.post(name: .VoIPCallDidEnd, object: nil)
     }
     
     /// End call from Jitsi meeting (when user ends the meeting)
@@ -277,6 +330,7 @@ class CallKitManager: NSObject, ObservableObject {
         
         print("📞 CallKitManager: Ending CallKit session for Jitsi transition")
         print("📞 CallKitManager: Current app state: \(UIApplication.shared.applicationState.rawValue)")
+        print("📞 CallKitManager: Current call state: \(currentCallState)")
         
         // Check if we're in a valid state for CallKit operations
         guard UIApplication.shared.applicationState != .background else {
@@ -289,6 +343,7 @@ class CallKitManager: NSObject, ObservableObject {
         
         // Mark that this end is part of Jitsi transition so the delegate doesn't treat it as a rejection
         isEndingForJitsiTransition = true
+        print("🎥 CallKitManager: Set isEndingForJitsiTransition = true")
 
         callController?.request(transaction) { error in
             DispatchQueue.main.async {
@@ -303,6 +358,7 @@ class CallKitManager: NSObject, ObservableObject {
                     self.currentCallState = .ended
                 } else {
                     print("✅ CallKitManager: CallKit session ended successfully")
+                    print("🎥 CallKitManager: isEndingForJitsiTransition flag will be handled by delegate")
                     // Delegate callback will handle state updates; avoid double-posting or clearing here
                 }
             }
@@ -382,6 +438,9 @@ extension CallKitManager: CXProviderDelegate {
         print("📞 CallKitManager: Answer call action")
         action.fulfill()
         
+        // Cancel timeout timer since call was answered
+        cancelCallTimeoutTimer()
+        
         // Update call state
         currentCallState = .connected
         
@@ -404,6 +463,9 @@ extension CallKitManager: CXProviderDelegate {
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         print("📞 CallKitManager: End call action")
         action.fulfill()
+        
+        // Cancel timeout timer
+        cancelCallTimeoutTimer()
 
         if isEndingForJitsiTransition {
             // This end was initiated to hand off to Jitsi – do NOT report as rejected or clear call info
@@ -416,10 +478,15 @@ extension CallKitManager: CXProviderDelegate {
             return
         }
 
-        // Normal end: report as rejected/ended BEFORE clearing state
-        // This ensures we have the call data when reporting the action
-        if currentCall != nil {
+        // Check if this is a normal call end (not Jitsi transition)
+        // Only report as rejected if the call was actually rejected by user or timed out
+        if currentCall != nil && currentCallState == .incoming {
+            // Call was rejected or timed out while still incoming
+            print("📞 CallKitManager: Call was rejected or timed out - reporting as REJECTED")
             reportCallAction(.rejected)
+        } else if currentCall != nil && currentCallState == .connected {
+            // Call was connected but ended - this should not be reported as rejected
+            print("📞 CallKitManager: Call was connected but ended - not reporting as rejected")
         }
         
         // Clear state after reporting

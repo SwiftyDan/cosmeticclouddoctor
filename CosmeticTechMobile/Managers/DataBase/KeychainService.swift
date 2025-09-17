@@ -173,6 +173,30 @@ class KeychainService: KeychainServiceProtocol {
         }
     }
 
+    // MARK: - Fresh Install Detection
+    /// Detects if this is a fresh install and clears Keychain data if needed
+    /// This ensures the app starts fresh after uninstallation
+    func handleFreshInstallDetection() {
+        let userDefaults = UserDefaults.standard
+        let freshInstallKey = "app_has_been_launched"
+        
+        // Check if this is the first launch after installation
+        if !userDefaults.bool(forKey: freshInstallKey) {
+            print("🆕 Fresh install detected - clearing Keychain data")
+            
+            // Clear all Keychain data for this app
+            clearAll()
+            
+            // Mark that the app has been launched
+            userDefaults.set(true, forKey: freshInstallKey)
+            userDefaults.synchronize()
+            
+            print("✅ Keychain cleared for fresh install")
+        } else {
+            print("🔄 App has been launched before - keeping Keychain data")
+        }
+    }
+    
     // MARK: - Accessibility Migration Helpers
     /// Ensures specified keys are marked as kSecAttrAccessibleAfterFirstUnlock so they are readable while locked
     func ensureBackgroundAccessibility(forKeys keys: [String]) {

@@ -49,7 +49,7 @@ struct HomeView: View {
         .onAppear {
             Task {
                 await viewModel.refreshCallHistory()
-                await viewModel.refreshQueueFromAPI()
+           //     await viewModel.refreshQueueFromAPI()
             }
         }
     }
@@ -113,11 +113,16 @@ struct QueueListSectionView: View {
                     icon: "clock.badge.questionmark",
                     title: "No queued items",
                     subtitle: "Patients waiting to be served will appear here.",
-                    iconSize: 60
+                    iconSize: 60,
+                    refreshAction: {
+                        Task {
+                            await viewModel.refreshQueueFromAPI()
+                        }
+                    }
                 )
                 .padding(.vertical, 20)
             } else {
-                List {
+                VStack(spacing: 8) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         QueueRowView(
                             item: item, 
@@ -131,10 +136,7 @@ struct QueueListSectionView: View {
                                 }
                             }
                         )
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        .contextMenu {
                             Button(role: .destructive) {
                                 Task {
                                     await viewModel.removeQueueItem(item)
@@ -145,9 +147,8 @@ struct QueueListSectionView: View {
                         }
                     }
                 }
-                .listStyle(.plain)
-                .frame(height: CGFloat(items.count * 80 + 20)) // Dynamic height based on items
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(.vertical, 8)
+                .padding(.horizontal, 16)
             }
         }
         .background(
@@ -189,13 +190,16 @@ private struct QueueRowView: View {
                         .background(Color.blue.opacity(0.15))
                         .foregroundColor(.blue)
                         .clipShape(Capsule())
-                    Text(item.patientName)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
                     Spacer()
                 }
+                
+                // Caller name display below Priority Label
+                Text(item.patientName)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(item.clinic)
@@ -203,7 +207,7 @@ private struct QueueRowView: View {
                             .foregroundColor(.secondary)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                        Text(item.createdAt.asRelativeTimeString())
+                        Text(item.createdAt.asDisplayString())
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }

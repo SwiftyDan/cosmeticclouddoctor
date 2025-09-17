@@ -20,6 +20,9 @@ struct CosmeticTechMobileApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     init() {
+        // CRITICAL: Handle fresh install detection FIRST to clear Keychain if needed
+        KeychainService().handleFreshInstallDetection()
+        
         // Early initialization to ensure PushKit registry is created and retained ASAP
         _ = VoIPPushHandler.shared
         // Initialize environment manager early to ensure environment is ready

@@ -49,12 +49,14 @@ struct EmptyStateView: View {
     let title: String
     let subtitle: String
     let iconSize: CGFloat
+    let refreshAction: (() -> Void)?
     
-    init(icon: String, title: String, subtitle: String, iconSize: CGFloat = 80) {
+    init(icon: String, title: String, subtitle: String, iconSize: CGFloat = 80, refreshAction: (() -> Void)? = nil) {
         self.icon = icon
         self.title = title
         self.subtitle = subtitle
         self.iconSize = iconSize
+        self.refreshAction = refreshAction
     }
     
     var body: some View {
@@ -73,6 +75,25 @@ struct EmptyStateView: View {
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
+            
+            if let refreshAction = refreshAction {
+                Button(action: refreshAction) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 16, weight: .medium))
+                        Text("Refresh")
+                            .font(.system(size: 16, weight: .medium))
+                    }
+                    .foregroundColor(.blue)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.blue.opacity(0.1))
+                    )
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

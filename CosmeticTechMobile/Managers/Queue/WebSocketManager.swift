@@ -533,6 +533,41 @@ final class WebSocketManager: ObservableObject, WebSocketDelegate {
         print("✅ VoIP call terminated successfully due to queue removal")
     }
     
+    /// Terminates Jitsi meeting if it matches the script_id from the removal event
+    private func terminateJitsiMeetingIfMatching(scriptId: Int?, scriptUUID: String?) {
+        let globalJitsiManager = GlobalJitsiManager.shared
+        
+        // Check if there's an active Jitsi meeting
+        guard globalJitsiManager.isPresentingJitsi else {
+            print("🎥 No active Jitsi meeting to terminate")
+            return
+        }
+        
+        // Check if we have script information to match
+        guard let scriptId = scriptId else {
+            print("🎥 No script_id provided for Jitsi meeting termination check")
+            return
+        }
+        
+        // Check if the current Jitsi meeting's script_id matches the removal script_id
+        guard let currentJitsiParams = globalJitsiManager.jitsiParameters,
+              let currentScriptId = currentJitsiParams.scriptId,
+              currentScriptId == scriptId else {
+            print("🎥 Active Jitsi meeting script_id (\(globalJitsiManager.jitsiParameters?.scriptId?.description ?? "nil")) doesn't match removal script_id (\(scriptId))")
+            return
+        }
+        
+        print("🎥 Terminating Jitsi meeting due to queue removal - script_id match: \(scriptId)")
+        print("   - Room: \(currentJitsiParams.roomName)")
+        print("   - Script ID: \(currentScriptId)")
+        print("   - Script UUID: \(currentJitsiParams.scriptUUID ?? "nil")")
+        
+        // Terminate the Jitsi meeting
+        globalJitsiManager.endCall()
+        
+        print("✅ Jitsi meeting terminated successfully due to queue removal")
+    }
+    
     /// Handles queue removal with background state awareness
     private func handleQueueRemovalWithBackgroundSupport(scriptId: Int?, scriptUUID: String?, patientName: String?) {
         // Check if app is in background or inactive state
@@ -554,6 +589,10 @@ final class WebSocketManager: ObservableObject, WebSocketDelegate {
             print("📱 App in foreground - using normal WebSocket handling")
             terminateVoIPCallIfMatching(scriptId: scriptId)
         }
+        
+        // Always check for active Jitsi meetings regardless of app state
+        // This ensures Jitsi meetings are terminated even when app is in lock screen state
+        terminateJitsiMeetingIfMatching(scriptId: scriptId, scriptUUID: scriptUUID)
     }
     
     // MARK: - Queue Maintenance
@@ -571,6 +610,15 @@ final class WebSocketManager: ObservableObject, WebSocketDelegate {
             print("     - Script Number: \(item.scriptNumber ?? "nil")")
             print("     - Clinic Slug: \(item.clinicSlug ?? "nil")")
         }
+    }
+    
+    /// Clears all queue data (used during logout)
+    func clearQueueData() {
+        print("🗑️ WebSocketManager: Clearing all queue data")
+        queueItems.removeAll()
+        connectionStatus = .disconnected
+        lastMessage = ""
+        print("✅ WebSocketManager: Queue data cleared")
     }
     
     /// Periodically cleans up any duplicates that might have accumulated

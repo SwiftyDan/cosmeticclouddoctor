@@ -499,6 +499,18 @@ class VoIPPushHandler: NSObject {
         print("✅ VoIP call terminated successfully due to queue removal")
     }
     
+    // MARK: - Clear State (for logout)
+    
+    /// Clears all VoIP push handler state (used during logout)
+    func clearVoIPState() {
+        print("🗑️ VoIPPushHandler: Clearing VoIP state")
+        // Reset VoIP push count
+        voipPushCount = 0
+        // Clear any pending VoIP tokens or state
+        // Note: We don't clear the VoIP registry itself as it's needed for background operation
+        print("✅ VoIPPushHandler: VoIP state cleared")
+    }
+    
     // MARK: - VoIP Call State Handling
     
     @objc private func handleVoIPCallDidEnd(_ notification: Notification) {
@@ -795,7 +807,22 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
         print("   - scriptUUID: \(scriptUUID ?? "nil")")
         print("   - clinicName: \(clinicName ?? "nil")")
 
-        // Check if we're already in a call, have a call ringing, or in a Jitsi meeting
+        // Check if Jitsi meeting is currently active FIRST
+        // CRITICAL: Must be synchronous to prevent app termination
+        if GlobalJitsiManager.shared.isPresentingJitsi {
+            print("🎥 VoIPPushHandler: Jitsi meeting is active - showing push notification instead of CallKit call")
+            self.showPushNotificationForJitsiCall(
+                callerName: displayNameFinal,
+                callerId: phoneNumberFinal,
+                scriptId: scriptId,
+                clinicSlug: clinicSlug,
+                scriptUUID: scriptUUID
+            )
+            voipCompletion?()
+            return
+        }
+        
+        // Check if we're already in a call or have a call ringing (but not in Jitsi)
         if isInCall || isCallRinging {
             print("📞 VoIPPushHandler: Call already in progress or ringing - queuing this call")
             enqueuePendingCall(
@@ -810,21 +837,6 @@ extension VoIPPushHandler: PKPushRegistryDelegate {
                 clinicSlug: clinicSlug,
                 scriptUUID: scriptUUID,
                 clinicName: clinicName
-            )
-            voipCompletion?()
-            return
-        }
-        
-        // Check if Jitsi meeting is currently active
-        // CRITICAL: Must be synchronous to prevent app termination
-        if GlobalJitsiManager.shared.isPresentingJitsi {
-            print("🎥 VoIPPushHandler: Jitsi meeting is active - showing push notification instead of CallKit call")
-            self.showPushNotificationForJitsiCall(
-                callerName: displayNameFinal,
-                callerId: phoneNumberFinal,
-                scriptId: scriptId,
-                clinicSlug: clinicSlug,
-                scriptUUID: scriptUUID
             )
             voipCompletion?()
             return

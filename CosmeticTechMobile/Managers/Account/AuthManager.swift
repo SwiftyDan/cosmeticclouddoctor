@@ -43,6 +43,9 @@ class AuthManager: ObservableObject {
     func logout() async {
         guard !isLoggingOut else { return }
         isLoggingOut = true
+        
+        print("🔐 Starting comprehensive logout cleanup...")
+        
         do {
             try await authService.logout()
         } catch {
@@ -50,14 +53,59 @@ class AuthManager: ObservableObject {
             authService.logoutLocal()
         }
         
-        // Clear saved credentials from keychain
-        let keychain = KeychainService()
-        keychain.delete(key: "saved_email")
-        keychain.delete(key: "saved_password")
+        // Clear all local data and cache
+        await clearAllLocalData()
         
         isLoggedIn = false
         currentUser = nil
         isLoggingOut = false
+        
+        print("✅ Logout completed - all data cleared")
+    }
+    
+    // MARK: - Clear All Local Data
+    private func clearAllLocalData() async {
+        print("🧹 Clearing all local data and cache...")
+        
+        // 1. Clear Keychain data
+        let keychain = KeychainService()
+        keychain.delete(key: "auth_token")
+        keychain.delete(key: "user_data")
+        keychain.delete(key: "user_uuid")
+        keychain.delete(key: "saved_email")
+        keychain.delete(key: "saved_password")
+        print("✅ Keychain data cleared")
+        
+        // 2. Clear UserDefaults data
+        let userDefaults = UserDefaults.standard
+        userDefaults.removeObject(forKey: "deviceToken")
+        userDefaults.removeObject(forKey: "app_badge_count")
+        userDefaults.removeObject(forKey: "API_ENVIRONMENT")
+        userDefaults.removeObject(forKey: "redirect_url")
+        userDefaults.removeObject(forKey: "pusher_key")
+        userDefaults.synchronize()
+        print("✅ UserDefaults data cleared")
+        
+        // 3. Queue data will be cleared when HomeViewModel is recreated
+        print("✅ Queue data will be cleared on next app launch")
+        
+        // 4. Clear call history data
+        CallKitManager.shared.clearCallData()
+        print("✅ Call data cleared")
+        
+        // 5. Clear Jitsi meeting state
+        GlobalJitsiManager.shared.clearJitsiState()
+        print("✅ Jitsi state cleared")
+        
+        // 6. Reset badge count
+        BadgeManager.shared.resetBadge()
+        print("✅ Badge count reset")
+        
+        // 7. Clear VoIP push handler state
+        VoIPPushHandler.shared.clearVoIPState()
+        print("✅ VoIP state cleared")
+        
+        print("🧹 All local data and cache cleared successfully")
     }
 
     // MARK: - Deactivate Account
